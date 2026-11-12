@@ -1,18 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException
-from app.security import require_engine_secret
-from app.main_state import get_task_manager
-router = APIRouter(dependencies=[Depends(require_engine_secret)])
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-@router.post("/wake")
-async def wake(manager=Depends(get_task_manager)):
+from app.security import require_engine_secret
+from app.storage.supabase import SupabaseError
+
+router = APIRouter()
+
+
+@router.post("/wake", dependencies=[Depends(require_engine_secret)])
+async def wake_worker(request: Request):
+    manager = getattr(request.app.state, "task_manager", None)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Worker non configuré.")
     manager.wake()
     return {"accepted": True}
 
-@router.get("/tasks/{job_id}")
-async def task_status(job_id: str, manager=Depends(get_task_manager)):
+
+@router.get("/tasks/{job_id}", dependencies=[Depends(require_engine_secret)])
+async def get_task(job_id: str, request: Request):
+    db = getattr(request.app.state, "supabase", None)
+    manager = getattr(request.app.state, "task_manager", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Stockage non configuré.")
     try:
-        job = await manager.db.get_render_job(job_id)
-    except Exception:
+        job = await db.get_render_job(job_id)
+    except SupabaseError:
         raise HTTPException(status_code=404, detail="Tâche introuvable.") from None
-    current = manager.current if manager.current and manager.current.get("id") == job_id else None
-    return {"job": job, "current_step": manager.step if current else None}
+    return {"job": job, "current_step": (manager.current.get("step") if manager and manager.current.get("job_id") == job_id else None)}

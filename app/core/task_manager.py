@@ -1,130 +1,181 @@
 from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
 import shutil
+import socket
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
-from app.config import Settings
-from app.core.renderer import FilmRenderer
-from app.media.supabase_resolver import resolve_film_media, write_credits
-from app.storage.supabase import SupabaseREST
+from typing import Any
 
-log = logging.getLogger("galingtosh.worker")
+from app.config import Settings
+from app.core.renderer import FilmRenderer, RenderError
+from app.media.supabase_resolver import resolve_film_media, write_credits
+from app.storage.supabase import SupabaseREST, SupabaseError
+
+logger = logging.getLogger("galingtosh.worker")
+
 
 class TaskManager:
+    """Worker séquentiel : une seule tâche de rendu à la fois."""
+
     def __init__(self, settings: Settings, db: SupabaseREST):
-        self.settings, self.db = settings, db
+        self.settings = settings
+        self.db = db
+        self.worker_id = settings.worker_id or socket.gethostname()
         self.wake_event = asyncio.Event()
         self.stop_event = asyncio.Event()
-        self.current: dict | None = None
-        self.step = "idle"
-        self.loop_task: asyncio.Task | None = None
-
-    def start(self) -> None:
-        if self.loop_task is None:
-            self.loop_task = asyncio.create_task(self.run_loop(), name="galingtosh-job-loop")
-
-    async def stop(self) -> None:
-        self.stop_event.set()
-        self.wake_event.set()
-        if self.loop_task:
-            self.loop_task.cancel()
-            try:
-                await self.loop_task
-            except asyncio.CancelledError:
-                pass
+        self.current: dict[str, str] = {}
 
     def wake(self) -> None:
         self.wake_event.set()
 
-    async def run_loop(self) -> None:
-        await self.db.requeue_stale_render_jobs()
-        next_requeue = asyncio.get_running_loop().time() + 300
+    async def run(self) -> None:
+        try:
+            await self.db.requeue_stale_render_jobs()
+        except Exception:
+            logger.warning("Le nettoyage initial des tâches bloquées a échoué.")
+        last_requeue = asyncio.get_running_loop().time()
         while not self.stop_event.is_set():
-            try:
-                if asyncio.get_running_loop().time() >= next_requeue:
-                    await self.db.requeue_stale_render_jobs()
-                    next_requeue = asyncio.get_running_loop().time() + 300
-                job = await self.db.claim_render_job(self.settings.worker_id)
-                if job:
-                    self.current = {"id": job.get("id"), "status": "running"}
-                    await self.process(job)
-                    self.current = None
-                    self.step = "idle"
-                    continue
-                self.wake_event.clear()
+            now = asyncio.get_running_loop().time()
+            if now - last_requeue >= 300:
                 try:
-                    await asyncio.wait_for(self.wake_event.wait(), timeout=self.settings.poll_interval_seconds)
-                except asyncio.TimeoutError:
-                    pass
+                    await self.db.requeue_stale_render_jobs()
+                except Exception:
+                    logger.warning("Le nettoyage périodique des tâches bloquées a échoué.")
+                last_requeue = now
+            try:
+                job = await self.db.claim_render_job(self.worker_id)
+                if job:
+                    await self.process_job(job)
+                    continue
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("Worker loop failure (details intentionally hidden)")
-                await asyncio.sleep(self.settings.poll_interval_seconds)
+                logger.warning("Le cycle de récupération des tâches a échoué.")
+            self.wake_event.clear()
+            try:
+                await asyncio.wait_for(
+                    self.wake_event.wait(), timeout=self.settings.poll_interval_seconds
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    async def shutdown(self) -> None:
+        self.stop_event.set()
+        self.wake_event.set()
 
     async def _is_canceled(self, job_id: str) -> bool:
-        state = await self.db.get_render_job(job_id)
-        return state.get("status") in {"canceled", "failed"}
+        job = await self.db.get_render_job(job_id)
+        return job.get("status") == "canceled"
 
-    async def process(self, job: dict) -> None:
-        job_id = str(job["id"])
-        Path(self.settings.temp_dir).mkdir(parents=True, exist_ok=True)
-        work = Path(tempfile.mkdtemp(prefix="galingtosh-job-", dir=self.settings.temp_dir))
-        output = work / "final.mp4"
+    async def _render_with_heartbeat(
+        self, job_id: str, renderer: FilmRenderer, film: dict,
+        media_files: dict[str, Path], output: Path,
+    ) -> dict[str, Any] | None:
+        render_task = asyncio.create_task(renderer.render(film, media_files, output))
         try:
-            self.step = "lecture_film"
-            await self.db.patch_render_job(job_id, {"progress": 2})
-            film = await self.db.read_film(str(job["project_id"]), int(job["film_version"]))
-            if await self._is_canceled(job_id): return
-            self.step = "resolution_medias"
-            media_files, warnings, credits = await resolve_film_media(
-                film, str(job["project_id"]), str(job["user_id"]), self.db, work / "media")
-            if await self._is_canceled(job_id): return
-            self.step = "rendu_video"
-            await self.db.patch_render_job(job_id, {"progress": 10, "warnings": warnings})
-            render_task = asyncio.create_task(FilmRenderer(
-                max_seconds=self.settings.max_render_seconds,
-                max_output_mb=self.settings.max_output_mb).render(film, media_files, output))
             while not render_task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(render_task), timeout=20)
-                except asyncio.TimeoutError:
-                    if await self._is_canceled(job_id):
-                        render_task.cancel()
-                        try: await render_task
-                        except asyncio.CancelledError: pass
-                        return
-                    await self.db.patch_render_job(job_id, {"progress": 10})
-            report = await render_task
-            if await self._is_canceled(job_id): return
-            self.step = "upload_rendu"
-            warnings = list(dict.fromkeys(warnings + report["warnings"]))
-            credits_path = work / f"{job_id}.credits.json"
-            write_credits(credits_path, credits)
-            object_path = f"{job['project_id']}/{job_id}.mp4"
-            await self.db.upload_file("renders", object_path, output, "video/mp4")
+                await asyncio.sleep(5)
+                job = await self.db.get_render_job(job_id)
+                if job.get("status") == "canceled":
+                    render_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await render_task
+                    return None
+                if job.get("status") != "running":
+                    render_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await render_task
+                    raise RenderError("La tâche n'est plus active.")
+                await self.db.patch_render_job(job_id, {"progress": 25})
+            return await render_task
+        except asyncio.CancelledError:
+            render_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await render_task
+            raise
+
+    async def process_job(self, claimed: dict) -> None:
+        job_id = str(claimed.get("id") or "")
+        if not job_id:
+            logger.error("Une tâche réclamée ne contient pas d'identifiant.")
+            return
+        self.current = {"job_id": job_id, "step": "initialisation"}
+        workdir = Path(tempfile.mkdtemp(prefix="galingtosh-job-", dir=self.settings.temp_dir))
+        output = workdir / "final.mp4"
+        try:
+            await self.db.patch_render_job(job_id, {"status": "running", "progress": 0})
+            job = await self.db.get_render_job(job_id)
+            if job.get("status") == "canceled":
+                return
+            self.current["step"] = "lecture du Film JSON"
+            film = await self.db.read_film(job["project_id"], int(job["film_version"]))
+            if await self._is_canceled(job_id):
+                return
+
+            self.current["step"] = "résolution des médias"
+            media_files, media_warnings, credits = await resolve_film_media(
+                film, str(job["project_id"]), str(job["user_id"]), self.db, workdir
+            )
+            if await self._is_canceled(job_id):
+                return
+            await self.db.patch_render_job(job_id, {"progress": 15})
+
+            self.current["step"] = "rendu vidéo"
+            renderer = FilmRenderer(
+                max_seconds=self.settings.max_render_seconds,
+                max_output_mb=self.settings.max_output_mb,
+            )
+            result = await self._render_with_heartbeat(
+                job_id, renderer, film, media_files, output
+            )
+            if result is None or await self._is_canceled(job_id):
+                return
+
+            warnings = list(dict.fromkeys(media_warnings + result.get("warnings", [])))
+            self.current["step"] = "préparation des crédits"
+            credits_path = workdir / f"{job_id}.credits.json"
             if credits:
-                await self.db.upload_file("renders", f"{job['project_id']}/{job_id}.credits.json",
-                                          credits_path, "application/json")
-            if await self._is_canceled(job_id): return
-            await self.db.patch_render_job(job_id, {"status": "done", "progress": 100,
-                "output_path": object_path, "warnings": warnings,
-                "finished_at": datetime.now(timezone.utc).isoformat()})
-            self.step = "done"
+                write_credits(credits_path, credits)
+
+            project_id = str(job["project_id"])
+            output_object = f"{project_id}/{job_id}.mp4"
+            self.current["step"] = "envoi du rendu"
+            if await self._is_canceled(job_id):
+                return
+            await self.db.patch_render_job(job_id, {"progress": 90})
+            await self.db.upload_file(
+                "renders", output_object, output, "video/mp4"
+            )
+            if credits:
+                await self.db.upload_file(
+                    "renders", f"{project_id}/{job_id}.credits.json",
+                    credits_path, "application/json",
+                )
+            if await self._is_canceled(job_id):
+                return
+            await self.db.patch_render_job(job_id, {
+                "status": "done",
+                "progress": 100,
+                "output_path": output_object,
+                "warnings": warnings,
+                "finished_at": "now()",
+            })
+            self.current["step"] = "terminé"
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            # Les détails internes ne sont jamais transmis à la base ni au client.
-            log.warning("Render job failed (%s)", type(exc).__name__)
-            try:
-                state = await self.db.get_render_job(job_id)
-                if state.get("status") not in {"canceled", "done"}:
-                    await self.db.patch_render_job(job_id, {"status": "failed",
-                        "error": "Le rendu a échoué. Vérifiez les médias et le Film JSON.",
-                        "finished_at": datetime.now(timezone.utc).isoformat()})
-            except Exception:
-                log.error("Could not persist failed job state")
+        except Exception:
+            logger.exception("Échec d'une tâche de rendu (détails masqués au client).")
+            with contextlib.suppress(Exception):
+                job = await self.db.get_render_job(job_id)
+                if job.get("status") != "canceled":
+                    await self.db.patch_render_job(job_id, {
+                        "status": "failed",
+                        "error": "Le rendu a échoué. Vérifiez le Film JSON et les médias, puis réessayez.",
+                        "finished_at": "now()",
+                    })
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            shutil.rmtree(workdir, ignore_errors=True)
+            self.current = {}
