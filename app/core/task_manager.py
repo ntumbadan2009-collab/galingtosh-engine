@@ -69,7 +69,7 @@ class TaskManager:
 
     async def _is_canceled(self, job_id: str) -> bool:
         job = await self.db.get_render_job(job_id)
-        return job.get("status") == "canceled"
+        return job.get("status") != "running"
 
     async def _render_with_heartbeat(
         self, job_id: str, renderer: FilmRenderer, film: dict,
@@ -108,10 +108,10 @@ class TaskManager:
         workdir = Path(tempfile.mkdtemp(prefix="galingtosh-job-", dir=self.settings.temp_dir))
         output = workdir / "final.mp4"
         try:
-            await self.db.patch_render_job(job_id, {"status": "running", "progress": 0})
             job = await self.db.get_render_job(job_id)
-            if job.get("status") == "canceled":
+            if job.get("status") != "running":
                 return
+            await self.db.patch_render_job(job_id, {"progress": 0})
             self.current["step"] = "lecture du Film JSON"
             film = await self.db.read_film(job["project_id"], int(job["film_version"]))
             if await self._is_canceled(job_id):
@@ -176,7 +176,7 @@ class TaskManager:
             logger.warning("Échec d'une tâche de rendu (détails masqués au client).")
             with contextlib.suppress(Exception):
                 job = await self.db.get_render_job(job_id)
-                if job.get("status") != "canceled":
+                if job.get("status") == "running":
                     await self.db.patch_render_job(job_id, {
                         "status": "failed",
                         "error": "Le rendu a échoué. Vérifiez le Film JSON et les médias, puis réessayez.",
