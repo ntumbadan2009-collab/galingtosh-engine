@@ -94,6 +94,8 @@ def sanitize_svg_to_png(source: Path, destination: Path) -> None:
     upper = raw.upper()
     if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
         raise GraphicsError("Déclaration XML interdite.")
+    if b"url(" in upper or b"@IMPORT" in upper:
+        raise GraphicsError("Référence CSS externe interdite.")
     try:
         root = ET.fromstring(raw)
     except ET.ParseError:

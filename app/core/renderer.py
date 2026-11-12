@@ -68,6 +68,9 @@ class FilmRenderer:
                 for shot_index, shot in enumerate(shots):
                     start = max(0.0, float(shot.get("inSec", 0)))
                     end = min(scene_duration, float(shot.get("outSec", 0)))
+                    if start < cursor:
+                        warnings.append(f"Scène {scene_index+1} : chevauchement de plans, le plan suivant est décalé.")
+                        start = cursor
                     if end <= start: continue
                     if start > cursor + 0.02:
                         warnings.append(f"Scène {scene_index+1} : intervalle vide rendu en noir.")
