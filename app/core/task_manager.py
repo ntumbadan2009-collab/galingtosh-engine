@@ -78,7 +78,7 @@ class TaskManager:
         render_task = asyncio.create_task(renderer.render(film, media_files, output))
         try:
             while not render_task.done():
-                await asyncio.sleep(5)
+                await asyncio.sleep(25)
                 job = await self.db.get_render_job(job_id)
                 if job.get("status") == "canceled":
                     render_task.cancel()
@@ -152,6 +152,10 @@ class TaskManager:
                 "renders", output_object, output, "video/mp4"
             )
             if credits:
+                # Vérifier de nouveau juste avant chaque écriture Storage :
+                # une annulation peut survenir pendant l'envoi de la vidéo.
+                if await self._is_canceled(job_id):
+                    return
                 await self.db.upload_file(
                     "renders", f"{project_id}/{job_id}.credits.json",
                     credits_path, "application/json",
