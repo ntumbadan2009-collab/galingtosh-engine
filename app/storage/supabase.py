@@ -80,7 +80,7 @@ class SupabaseREST:
         if bucket not in ALLOWED_UPLOAD_BUCKETS:
             raise SupabaseError("Bucket de destination interdit.")
         clean = object_path.replace("\\", "/")
-        if clean.startswith("/") or "\\x00" in clean or any(p in {"", ".", ".."} for p in clean.split("/")):
+        if clean.startswith("/") or "\x00" in clean or any(p in {"", ".", ".."} for p in clean.split("/")):
             raise SupabaseError("Chemin de destination invalide.")
         if not source.is_file() or source.stat().st_size > 50 * 1024 * 1024:
             raise SupabaseError("Fichier de rendu absent ou trop volumineux.")
