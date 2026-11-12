@@ -11,6 +11,7 @@ from app.core.validator import validate_film
 from app.media.ffmpeg import FFmpegError, probe_media, run_ffmpeg
 from app.media.images import normalize_image
 from app.media.video import normalize_video
+from app.media.transitions import assemble_segments
 
 ASPECTS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1), "4:3": (4, 3), "4:5": (4, 5), "21:9": (21, 9)}
 
@@ -60,6 +61,8 @@ class FilmRenderer:
         output.parent.mkdir(parents=True, exist_ok=True)
         work = Path(tempfile.mkdtemp(prefix="gt-render-"))
         segments: list[Path] = []
+        segment_shot_ids: list[str | None] = []
+        segment_durations: list[float] = []
         try:
             for scene_index, scene in enumerate(scenes):
                 scene_duration = float(scene.get("durationSec", 0))
@@ -75,6 +78,8 @@ class FilmRenderer:
                         black = work / f"segment_{len(segments):04d}.mp4"
                         await self._black(black, width, height, fps, start-cursor)
                         segments.append(black)
+                        segment_shot_ids.append(None)
+                        segment_durations.append(start-cursor)
                     duration = end - start
                     media_id = shot.get("mediaRef")
                     media = media_index.get(media_id) if media_id else None
@@ -98,24 +103,23 @@ class FilmRenderer:
                             warnings.append(f"Type de média non pris en charge pour le plan {shot_index+1}.")
                             await self._black(segment, width, height, fps, duration)
                     segments.append(segment)
+                    segment_shot_ids.append(str(shot.get("id")) if shot.get("id") is not None else None)
+                    segment_durations.append(duration)
                     cursor = end
                 if cursor < scene_duration:
                     warnings.append(f"Scène {scene_index+1} : fin non couverte, fond noir ajouté.")
                     black = work / f"segment_{len(segments):04d}.mp4"
                     await self._black(black, width, height, fps, scene_duration-cursor)
                     segments.append(black)
+                    segment_shot_ids.append(None)
+                    segment_durations.append(scene_duration-cursor)
             if not segments:
                 raise RenderError("Aucun plan exploitable dans le Film JSON.")
-            transitions = film.get("transitions", []) or []
-            if transitions:
-                warnings.append("Les transitions déclarées sont temporairement remplacées par des coupes franches dans cette version.")
-            concat_list = work / "concat.txt"
-            concat_list.write_text("".join(f"file '{p.as_posix()}'\n" for p in segments), encoding="utf-8")
-            await run_ffmpeg([
-                "-f", "concat", "-safe", "0", "-i", str(concat_list),
-                "-an", "-c:v", "libx264", "-preset", "veryfast", "-threads", "1",
-                "-pix_fmt", "yuv420p", "-r", str(fps), "-movflags", "+faststart", str(output)
-            ], timeout=self.max_seconds)
+            transition_warnings = await assemble_segments(
+                segments, segment_shot_ids, segment_durations,
+                film.get("transitions", []) or [], output, fps, self.max_seconds
+            )
+            warnings.extend(transition_warnings)
             size_mb = output.stat().st_size / (1024 * 1024)
             if size_mb > self.max_output_mb:
                 output.unlink(missing_ok=True)
