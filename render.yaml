@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: galingtosh-engine
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        value: https://lmlwekcytivszlszmfvy.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ENGINE_SHARED_SECRET
+        sync: false
+      - key: WORKER_ID
+        value: galingtosh-engine
+      - key: POLL_INTERVAL_SECONDS
+        value: "8"
+      - key: MAX_RENDER_SECONDS
+        value: "600"
+      - key: MAX_OUTPUT_MB
+        value: "45"
