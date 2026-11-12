@@ -33,3 +33,17 @@ Voir les étapes précédentes dans ce README et `.env.example`. Aucune table, c
 ## Tests
 
 `pytest -q` exécute les tests unitaires et le test FFmpeg (si FFmpeg/ffprobe sont installés). Ces tests sont ajoutés au dépôt mais doivent encore être exécutés dans un environnement Python/FFmpeg réel avant toute mise en production.
+
+## Résolution des médias depuis Supabase
+
+`SupabaseREST` lit la version immuable de `films.data` et les lignes `media_assets`
+correspondant au projet et aux identifiants référencés. Les lignes de `media_assets`
+ne sont jamais modifiées. Les fichiers `source=upload` sont téléchargés depuis le
+bucket privé `user-uploads`, avec contrôle du préfixe `{user_id}/` et une limite de 200 Mo.
+Les médias `source=search` utilisent `provenance.download_url`, puis `preview_url`
+en repli. Les crédits de recherche peuvent être exportés en JSON par `write_credits`.
+
+L'intégration de résolution est fournie comme module appelable ; le cycle de tâches,
+l'upload du rendu et l'écriture du fichier de crédits dans le bucket `renders`
+restent à intégrer au worker. Les médias générés programmatiquement et les graphiques
+ne sont pas encore matérialisés par ce résolveur.
