@@ -27,4 +27,4 @@ async def capabilities():
         "effects":["fade_in","fade_out","grayscale","vignette","text_overlay"],
         "graphics":{"charts":True,"svg":True,"3d":False},"tts":{"providers":[],"status":"not_configured"},
         "limits":{"max_render_seconds":settings.max_render_seconds,"max_output_mb":settings.max_output_mb,
-            "resolutions":["720p","1080p","4k"],"concurrent_renders":1}}
+            "resolutions":["720p","1080p"],"max_pixels":2073600,"concurrent_renders":1}}
