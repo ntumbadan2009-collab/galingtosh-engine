@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import datetime, timezone
 import shutil
 import socket
 import tempfile
@@ -103,6 +104,7 @@ class TaskManager:
             logger.error("Une tâche réclamée ne contient pas d'identifiant.")
             return
         self.current = {"job_id": job_id, "step": "initialisation"}
+        Path(self.settings.temp_dir).mkdir(parents=True, exist_ok=True)
         workdir = Path(tempfile.mkdtemp(prefix="galingtosh-job-", dir=self.settings.temp_dir))
         output = workdir / "final.mp4"
         try:
@@ -161,13 +163,17 @@ class TaskManager:
                 "progress": 100,
                 "output_path": output_object,
                 "warnings": warnings,
-                "finished_at": "now()",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
             })
             self.current["step"] = "terminé"
         except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                job = await self.db.get_render_job(job_id)
+                if job.get("status") == "running":
+                    await self.db.patch_render_job(job_id, {"status": "queued", "progress": 0})
             raise
         except Exception:
-            logger.exception("Échec d'une tâche de rendu (détails masqués au client).")
+            logger.warning("Échec d'une tâche de rendu (détails masqués au client).")
             with contextlib.suppress(Exception):
                 job = await self.db.get_render_job(job_id)
                 if job.get("status") != "canceled":
