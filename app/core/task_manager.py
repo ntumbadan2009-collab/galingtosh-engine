@@ -14,6 +14,7 @@ from app.config import Settings
 from app.core.renderer import FilmRenderer, RenderError
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
+from app.media.tts import synthesize_tts_tracks
 from app.storage.supabase import SupabaseREST, SupabaseError
 
 logger = logging.getLogger("galingtosh.worker")
@@ -122,6 +123,11 @@ class TaskManager:
             media_files, media_warnings, credits = await resolve_film_media(
                 film, str(job["project_id"]), str(job["user_id"]), self.db, workdir
             )
+            if await self._is_canceled(job_id):
+                return
+            tts_files, tts_warnings = await synthesize_tts_tracks(film, workdir)
+            media_files.update(tts_files)
+            media_warnings.extend(tts_warnings)
             if await self._is_canceled(job_id):
                 return
             await self.db.patch_render_job(job_id, {"progress": 15})
