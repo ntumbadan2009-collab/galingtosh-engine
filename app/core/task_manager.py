@@ -13,6 +13,7 @@ from typing import Any
 from app.config import Settings
 from app.core.renderer import FilmRenderer, RenderError
 from app.media.supabase_resolver import resolve_film_media, write_credits
+from app.media.subtitles import write_srt
 from app.storage.supabase import SupabaseREST, SupabaseError
 
 logger = logging.getLogger("galingtosh.worker")
@@ -141,6 +142,9 @@ class TaskManager:
             credits_path = workdir / f"{job_id}.credits.json"
             if credits:
                 write_credits(credits_path, credits)
+            srt_path = workdir / f"{job_id}.srt"
+            has_srt = write_srt(film.get("subtitles", []) or [], srt_path,
+                                (film.get("info") or {}).get("language"))
 
             project_id = str(job["project_id"])
             output_object = f"{project_id}/{job_id}.mp4"
@@ -159,6 +163,12 @@ class TaskManager:
                 await self.db.upload_file(
                     "renders", f"{project_id}/{job_id}.credits.json",
                     credits_path, "application/json",
+                )
+            if has_srt:
+                if await self._is_canceled(job_id):
+                    return
+                await self.db.upload_file(
+                    "renders", f"{project_id}/{job_id}.srt", srt_path, "application/x-subrip"
                 )
             if await self._is_canceled(job_id):
                 return

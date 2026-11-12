@@ -40,7 +40,11 @@ async def mix_audio(video: Path, tracks: list[dict], media_files: dict[str, Path
         label=f"a{index}"; delay=round(start*1000)
         graph.append(f"[{index}:a]atrim=duration={duration:.4f},asetpts=PTS-STARTPTS,volume={volume:.2f}dB,adelay={delay}:all=1,apad,atrim=duration={total_duration:.4f}[{label}]")
         labels.append(f"[{label}]")
-    graph.append("".join(labels)+f"amix=inputs={len(labels)}:duration=longest:dropout_transition=2,alimiter=limit=0.95[aout]")
+    fade_duration = min(1.0, max(0.05, total_duration))
+    fade_start = max(0.0, total_duration - fade_duration)
+    graph.append("".join(labels) + f"amix=inputs={len(labels)}:duration=longest:dropout_transition=2,"
+                 f"alimiter=limit=0.95,loudnorm=I=-16:TP=-1.5:LRA=11,"
+                 f"afade=t=out:st={fade_start:.4f}:d={fade_duration:.4f}[aout]")
     await run_ffmpeg([*args,"-filter_complex",";".join(graph),"-map","0:v:0","-map","[aout]","-c:v","copy",
         "-c:a","aac","-b:a",f"{max(64,min(256,int(bitrate_kbps)))}k","-t",f"{total_duration:.4f}",
         "-movflags","+faststart",str(destination)],timeout=max(600,int(total_duration*3)))
