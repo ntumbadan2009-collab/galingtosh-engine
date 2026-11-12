@@ -1,49 +1,40 @@
 # Galingtosh Engine
 
-Moteur de rendu autonome de Galingtosh 2, indépendant de l'application mobile.
+Moteur de rendu déterministe de Galingtosh 2. Le moteur vidéo utilise Python + FFmpeg ; aucune génération IA d'image ou de vidéo n'est intégrée.
 
-## État réel — étape 3 (pipeline vidéo initial)
+## État du dépôt
 
-- API FastAPI, validation initiale Film JSON et client Supabase REST.
-- Renderer déterministe d'images et de vidéos locales vers MP4 H.264/yuv420p.
-- Images fixes et mouvements Ken Burns/zoom/pan/tilt via filtres FFmpeg.
-- Découpage temporel des plans, remplissage des intervalles absents par du noir, limitation de durée et de taille, inspection finale ffprobe.
-- Médias manquants et types non supportés signalés en warnings.
-- Les transitions Film JSON sont pour l'instant rendues en coupes franches avec avertissement.
-- Audio, sous-titres, TTS, effets avancés, graphiques/SVG et résolveur média Supabase ne sont pas encore livrés.
-- Le worker automatique et l'endpoint `/wake` ne sont pas activés.
+- API FastAPI : `/health`, `/capabilities`, `/render/validate`, `/wake`, `/tasks/{job_id}`.
+- Client Supabase REST : lecture des versions de films et des références `media_assets`, lecture des jobs, claim atomique via RPC, heartbeat/progression par PATCH limité aux colonnes autorisées, upload Storage limité à `renders` et `temp-assets`.
+- Worker mono-job : claim, lecture Film JSON, résolution upload/search, rendu MP4, crédits JSON, upload, statut final.
+- Résolution search : URL HTTP(S) seulement, vérification DNS contre IP non publiques et contrôle du MIME réel ; les redirections sont validées à chaque saut.
+- Médias 3D, audio, TTS, sous-titres, effets avancés, graphiques/SVG et rendu programmatique restent incomplets.
+- Le rendu actuel produit une piste vidéo sans audio. Les jobs qui nécessitent une bande sonore ne sont donc pas encore conformes au cahier des charges complet.
+- Aucun schéma SQL, table, colonne, bucket ou RPC n'est créé/modifié par ce dépôt.
 
-## Utilisation Python
+## Configuration
 
-```python
-from pathlib import Path
-from app.core.renderer import FilmRenderer
+Variables : `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ENGINE_SHARED_SECRET`, `WORKER_ID`, `POLL_INTERVAL_SECONDS`, `MAX_RENDER_SECONDS`, `MAX_OUTPUT_MB`. Ne jamais placer les clés dans le code ou les journaux.
 
-result = await FilmRenderer(max_seconds=600, max_output_mb=45).render(
-    film_json, {"media-id": Path("/tmp/media/image.jpg")}, Path("/tmp/final.mp4")
-)
+Le worker ne démarre que si la clé service_role et le secret interne sont configurés. Le secret est comparé en temps constant sur les routes protégées.
+
+## Contrat de stockage
+
+- Lecture des médias uploadés uniquement depuis `user-uploads/{user_id}/...`.
+- Sorties uniquement vers `renders/{project_id}/{job_id}.mp4` et, si des médias de recherche sont présents, `{job_id}.credits.json`.
+- Seules les colonnes `status, progress, output_path, error, warnings, finished_at` de `render_jobs` sont modifiables.
+- Les RPC `claim_render_job` et `requeue_stale_render_jobs` doivent déjà exister conformément au contrat Supabase communiqué. Ce moteur ne les crée pas.
+
+## Exécution
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+pytest -q
 ```
 
-Les fichiers média doivent être préalablement téléchargés et vérifiés par un résolveur sécurisé. Ne passez jamais un chemin fourni directement par un client sans le confiner à un répertoire de travail.
+Le worker démarre au lancement si ses secrets sont configurés. `POST /wake` accepte `X-Engine-Secret`. Le worker vérifie les statuts avant/après les phases coûteuses et nettoie son répertoire temporaire.
 
-## API et Supabase
+## Limites de déploiement
 
-Voir les étapes précédentes dans ce README et `.env.example`. Aucune table, colonne, RPC ou bucket n'est créé ou modifié ici. Les écritures Supabase autorisées restent limitées aux colonnes listées de `render_jobs` et aux buckets `renders` / `temp-assets`.
-
-## Tests
-
-`pytest -q` exécute les tests unitaires et le test FFmpeg (si FFmpeg/ffprobe sont installés). Ces tests sont ajoutés au dépôt mais doivent encore être exécutés dans un environnement Python/FFmpeg réel avant toute mise en production.
-
-## Résolution des médias depuis Supabase
-
-`SupabaseREST` lit la version immuable de `films.data` et les lignes `media_assets`
-correspondant au projet et aux identifiants référencés. Les lignes de `media_assets`
-ne sont jamais modifiées. Les fichiers `source=upload` sont téléchargés depuis le
-bucket privé `user-uploads`, avec contrôle du préfixe `{user_id}/` et une limite de 200 Mo.
-Les médias `source=search` utilisent `provenance.download_url`, puis `preview_url`
-en repli. Les crédits de recherche peuvent être exportés en JSON par `write_credits`.
-
-L'intégration de résolution est fournie comme module appelable ; le cycle de tâches,
-l'upload du rendu et l'écriture du fichier de crédits dans le bucket `renders`
-restent à intégrer au worker. Les médias générés programmatiquement et les graphiques
-ne sont pas encore matérialisés par ce résolveur.
+Render Free est éphémère et contraint en mémoire/CPU. Un seul rendu est traité à la fois ; une interruption brutale peut nécessiter la RPC de réattribution des tâches périmées. Vérifier le comportement de veille et de réveil sur le service déployé avant production.
