@@ -6,3 +6,4 @@ pydantic-settings>=2.4,<3
 pytest>=8,<9
 pytest-asyncio>=0.24,<1
 aiohttp>=3.10,<4
+cairosvg>=2.7,<3
