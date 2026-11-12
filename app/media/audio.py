@@ -13,10 +13,11 @@ async def mix_audio(video: Path, tracks: list[dict], media_files: dict[str, Path
     inputs=[]; warnings=[]
     for track in tracks:
         if not isinstance(track,dict): continue
-        if track.get("tts"): warnings.append("Voix TTS non disponible : fournissez un fichier audio pour cette piste.")
         source=media_files.get(str(track.get("mediaRef"))) if track.get("mediaRef") else None
         if not source or not source.is_file():
-            if track.get("kind") in {"voiceover","dialogue","music","sfx"}:
+            if track.get("tts"):
+                warnings.append(f"Voix TTS indisponible pour la piste {track.get('id','')} : piste ignorée.")
+            elif track.get("kind") in {"voiceover","dialogue","music","sfx"}:
                 warnings.append(f"Piste audio {track.get('id','')} sans fichier exploitable : ignorée.")
             continue
         volume=_db(track.get("volumeDb",0)); events=track.get("events") or []
