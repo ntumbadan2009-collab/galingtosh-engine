@@ -23,8 +23,9 @@ class SupabaseREST:
         return {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
 
     async def _request(self, method: str, path: str, **kwargs):
+        headers = {**self._headers(), **kwargs.pop("headers", {})}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.request(method, f"{self.base}{path}", headers=self._headers(), **kwargs)
+            response = await client.request(method, f"{self.base}{path}", headers=headers, **kwargs)
         if response.status_code >= 400:
             raise SupabaseError("Opération Supabase impossible.")
         return response

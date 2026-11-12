@@ -70,6 +70,7 @@ class TaskManager:
 
     async def process(self, job: dict) -> None:
         job_id = str(job["id"])
+        Path(self.settings.temp_dir).mkdir(parents=True, exist_ok=True)
         work = Path(tempfile.mkdtemp(prefix="galingtosh-job-", dir=self.settings.temp_dir))
         output = work / "final.mp4"
         try:
