@@ -108,6 +108,6 @@ def sanitize_svg_to_png(source: Path, destination: Path) -> None:
                 raise GraphicsError("Événement SVG interdit.")
             if name in {"href", "src"} and value and not value.startswith("#"):
                 raise GraphicsError("Référence SVG externe interdite.")
-            if "url(" in value.lower() and not re.fullmatch(r".*url\\(#[A-Za-z0-9_.-]+\\).*", value):
+            if "url(" in value.lower():
                 raise GraphicsError("Référence SVG externe interdite.")
     cairosvg.svg2png(bytestring=raw, write_to=str(destination), output_width=1920, output_height=1080)
