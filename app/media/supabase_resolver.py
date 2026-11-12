@@ -60,7 +60,11 @@ async def resolve_film_media(film:dict[str,Any],project_id:str,user_id:str,db:Su
    else:
     final=target.with_suffix(EXTENSIONS[mime]); target.replace(final)
    files[mid]=final
-   if source=="search": credits.append(_credit(row))
+   if source=="search":
+    credit=_credit(row)
+    credits.append(credit)
+    if credit["license"]=="Licence non renseignée" or not credit.get("attribution"):
+     warnings.append(f"Crédits incomplets pour le média recherché {mid} : vérifiez la licence et l’attribution.")
   except Exception:
    target.unlink(missing_ok=True); warnings.append(f"Média {mid} indisponible ou non conforme : ignoré.")
  return files,list(dict.fromkeys(warnings)),credits
