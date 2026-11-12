@@ -45,7 +45,7 @@ def validate_remote_url(url: str) -> str:
         if isinstance(exc,UnsafeMediaURL): raise
         raise UnsafeMediaURL("URL média invalide.") from None
 
-async def download_public_media(url: str, destination: Path, max_bytes: int = MAX_REMOTE_BYTES) -> int:
+async def download_public_media(url: str, destination: Path, max_bytes: int = MAX_REMOTE_BYTES) -> tuple[int, str]:
     current=validate_remote_url(url)
     connector=aiohttp.TCPConnector(resolver=SafePublicResolver(),use_dns_cache=False,limit=2)
     timeout=aiohttp.ClientTimeout(total=45,connect=10,sock_read=20)
@@ -59,6 +59,7 @@ async def download_public_media(url: str, destination: Path, max_bytes: int = MA
                         if not location or hop==3: raise UnsafeMediaURL("Redirection média refusée.")
                         current=validate_remote_url(urljoin(current,location)); continue
                     if response.status<200 or response.status>=300: raise OSError("Téléchargement média refusé.")
+                    content_type = response.headers.get("Content-Type", "").split(";")[0].lower()
                     if response.content_length and response.content_length>max_bytes: raise OSError("Média trop volumineux.")
                     total=0
                     with destination.open("wb") as out:
@@ -67,7 +68,7 @@ async def download_public_media(url: str, destination: Path, max_bytes: int = MA
                             if total>max_bytes: raise OSError("Média trop volumineux.")
                             out.write(chunk)
                     if not total: raise OSError("Média distant vide.")
-                    return total
+                    return total, content_type
         raise OSError("Téléchargement interrompu.")
     except Exception:
         destination.unlink(missing_ok=True)

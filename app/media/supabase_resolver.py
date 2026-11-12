@@ -85,12 +85,8 @@ async def resolve_film_media(
                 if not remote_url:
                     warnings.append(f"Média recherché {media_id} sans URL de téléchargement.")
                     continue
-                count = await download_public_media(str(remote_url), destination, MAX_MEDIA_BYTES)
-                # Le type est déterminé par la signature HTTP au téléchargement, puis contrôlé ci-dessous.
-                mime = mimetypes.guess_type(str(remote_url).split("?")[0])[0] or ""
-                if not mime:
-                    mime = "application/octet-stream"
-                if mime == "application/octet-stream":
+                count, mime = await download_public_media(str(remote_url), destination, MAX_MEDIA_BYTES)
+                if not mime or mime == "application/octet-stream":
                     warnings.append(f"Média {media_id} : type MIME non vérifiable, fichier conservé sous réserve.")
             else:
                 warnings.append(f"Source « {source} » du média {media_id} non prise en charge.")
