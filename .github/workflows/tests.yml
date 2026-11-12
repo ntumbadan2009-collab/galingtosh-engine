@@ -13,6 +13,9 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      ENGINE_SHARED_SECRET: ci-test-secret
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,6 +33,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run tests
-        env:
-          ENGINE_SHARED_SECRET: ci-test-secret
         run: pytest -q
