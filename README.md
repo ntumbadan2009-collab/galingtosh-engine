@@ -1,37 +1,35 @@
 # Galingtosh Engine
 
-Moteur de rendu vidéo autonome de Galingtosh 2. Dépôt indépendant de l'application mobile et du backend existant.
+Moteur de rendu autonome de Galingtosh 2, indépendant de l'application mobile.
 
-## État réel — étape 2
+## État réel — étape 3 (pipeline vidéo initial)
 
-- Opérationnel dans le code : API FastAPI, santé, capacités FFmpeg, validation initiale du Film JSON, authentification par secret partagé, client Supabase REST, lecture d'une tâche et du Film JSON, RPC de claim/requeue, patch limité aux colonnes autorisées de `render_jobs`, upload limité aux buckets `renders` et `temp-assets`.
-- Tests présents : validation, API et client Supabase mocké.
-- Pas encore implémenté : boucle worker active, rendu FFmpeg, téléchargement média sécurisé/SSRF, stockage de sortie utilisé par un pipeline, audio, sous-titres, TTS, graphiques/SVG et annulation pilotée par le worker.
+- API FastAPI, validation initiale Film JSON et client Supabase REST.
+- Renderer déterministe d'images et de vidéos locales vers MP4 H.264/yuv420p.
+- Images fixes et mouvements Ken Burns/zoom/pan/tilt via filtres FFmpeg.
+- Découpage temporel des plans, remplissage des intervalles absents par du noir, limitation de durée et de taille, inspection finale ffprobe.
+- Médias manquants et types non supportés signalés en warnings.
+- Les transitions Film JSON sont pour l'instant rendues en coupes franches avec avertissement.
+- Audio, sous-titres, TTS, effets avancés, graphiques/SVG et résolveur média Supabase ne sont pas encore livrés.
+- Le worker automatique et l'endpoint `/wake` ne sont pas activés.
 
-**Le claim n'est pas appelé automatiquement.** On évite de réserver des jobs de production avant que le pipeline de rendu soit prêt.
+## Utilisation Python
 
-## Configuration
+```python
+from pathlib import Path
+from app.core.renderer import FilmRenderer
 
-Python 3.12 et FFmpeg requis. Copier `.env.example` vers `.env`, puis renseigner les secrets localement. Ne jamais commiter le fichier `.env`.
-
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-pytest -q
+result = await FilmRenderer(max_seconds=600, max_output_mb=45).render(
+    film_json, {"media-id": Path("/tmp/media/image.jpg")}, Path("/tmp/final.mp4")
+)
 ```
 
-Routes : `GET /health`, `GET /capabilities`, `POST /render/validate` et `GET /tasks/{job_id}`. Les deux dernières exigent `X-Engine-Secret`.
+Les fichiers média doivent être préalablement téléchargés et vérifiés par un résolveur sécurisé. Ne passez jamais un chemin fourni directement par un client sans le confiner à un répertoire de travail.
 
-## Contrat Supabase
+## API et Supabase
 
-Projet Galingtosh 2 : `https://lmlwekcytivszlszmfvy.supabase.co`.
+Voir les étapes précédentes dans ce README et `.env.example`. Aucune table, colonne, RPC ou bucket n'est créé ou modifié ici. Les écritures Supabase autorisées restent limitées aux colonnes listées de `render_jobs` et aux buckets `renders` / `temp-assets`.
 
-Le client utilise uniquement le contrat communiqué : `render_jobs`, `films.data`, `media_assets`, RPC `claim_render_job` et `requeue_stale_render_jobs`. Les PATCH sur `render_jobs` sont limités à `status, progress, output_path, error, warnings, finished_at`. Les uploads sont autorisés seulement vers `renders` et `temp-assets`. Aucun SQL, table, colonne ou fonction n'est créé par ce dépôt.
+## Tests
 
-Le client ne journalise ni clé, ni contenu de réponse d'erreur, ni URL signée. Le téléchargement des médias de recherche et la protection SSRF seront livrés avec la couche médias avant activation du worker.
-
-## Déploiement Render
-
-Le Blueprint `render.yaml` configure un Web Service Docker Free. Renseigner `SUPABASE_SERVICE_ROLE_KEY` et `ENGINE_SHARED_SECRET` dans les variables secrètes du service. Le worker de rendu n'est pas encore activé : ne pas encore connecter le backend à un endpoint `/wake`.
+`pytest -q` exécute les tests unitaires et le test FFmpeg (si FFmpeg/ffprobe sont installés). Ces tests sont ajoutés au dépôt mais doivent encore être exécutés dans un environnement Python/FFmpeg réel avant toute mise en production.
