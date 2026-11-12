@@ -90,7 +90,7 @@ class FilmRenderer:
                             camera = ((shot.get("camera") or {}).get("type") or "none")
                             await normalize_image(source, segment, width, height, fps, duration, camera)
                         elif kind == "video" or source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
-                            await normalize_video(source, segment, width, height, fps, start, duration)
+                            await normalize_video(source, segment, width, height, fps, start, duration, ((shot.get("camera") or {}).get("type") or "none"))
                         else:
                             warnings.append(f"Type de média non visuel pour le plan {shot_index+1}.")
                             await self._black(segment, width, height, fps, duration)
