@@ -180,7 +180,7 @@ class TaskManager:
                     await self.db.patch_render_job(job_id, {
                         "status": "failed",
                         "error": "Le rendu a échoué. Vérifiez le Film JSON et les médias, puis réessayez.",
-                        "finished_at": "now()",
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
                     })
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
