@@ -52,6 +52,8 @@ class FilmRenderer:
         if total_duration <= 0: raise RenderError("La durée totale du film doit être positive.")
         if total_duration > self.max_seconds: raise RenderError(f"Durée demandée supérieure à la limite de {self.max_seconds} secondes.")
         width, height = output_size(film)
+        if width * height > 1920 * 1080:
+            raise RenderError("Résolution trop élevée pour le profil mémoire du moteur : maximum 1920 × 1080 pixels.")
         fps = int(min(30, max(1, (film.get("format") or {}).get("fps", 24))))
         media_index = collect_media(film)
         warnings = list(report["warnings"])

@@ -16,7 +16,7 @@ Moteur de montage audiovisuel déterministe de Galingtosh 2. Le moteur reçoit u
 - Modèles 3D et rendu 3D.
 - Génération de médias par IA.
 - TTS : aucune voix n'est synthétisée dans cette version. Les pistes TTS sans fichier audio sont signalées comme avertissement.
-- Rendu 4K/1080p sur Render Free : les résolutions peuvent être demandées mais les ressources CPU/RAM, la durée et la taille peuvent imposer un échec. 720p est le profil recommandé.
+- Rendu 4K/1080p sur Render Free : le moteur refuse les sorties dépassant 2,07 mégapixels (profil mémoire 1080p) ; les ressources CPU/RAM, la durée et la taille peuvent aussi imposer un échec. 720p est le profil recommandé.
 - Effets ou transitions non répertoriés : avertissement et comportement de repli.
 
 ## Déploiement
