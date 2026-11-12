@@ -29,6 +29,7 @@ Le moteur utilise uniquement les tables, colonnes, RPC et buckets décrits dans 
 ## API
 - `GET /health` : santé du service.
 - `GET /capabilities` : capacités annoncées.
+- `POST /media/probe` : analyse protégée d’un média référencé dans `media_assets`.
 - `POST /render/validate` : validation Film JSON, protégé par `X-Engine-Secret`.
 - `POST /wake` : réveil du worker, protégé.
 - `GET /tasks/{job_id}` : statut et étape, protégé.

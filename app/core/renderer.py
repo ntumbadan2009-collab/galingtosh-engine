@@ -108,6 +108,7 @@ class FilmRenderer:
                 film.get("transitions", []) or [], assembled, fps, self.max_seconds))
             filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height)
             warnings.extend(effect_warnings)
+            applied_effect_count = len(filters)
             subtitle_path = work / "captions.srt"
             has_subtitles = write_srt(film.get("subtitles", []) or [], subtitle_path, (film.get("info") or {}).get("language"))
             styled = work / "styled.mp4"
@@ -128,7 +129,7 @@ class FilmRenderer:
                 "width": video.get("width"), "height": video.get("height"), "fps": fps,
                 "size_mb": round(size_mb, 3), "warnings": list(dict.fromkeys(warnings)),
                 "audio": any(s.get("codec_type") == "audio" for s in streams),
-                "subtitles_burned": has_subtitles, "effects_applied": len(filters)}
+                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count}
         except (OSError, FFmpegError) as exc:
             raise RenderError(str(exc)) from None
         finally:
