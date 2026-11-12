@@ -15,6 +15,9 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
     errors=[]; warnings=[]
     if not isinstance(film,dict):
         return {"valid":False,"errors":["Le document Film doit être un objet JSON."],"warnings":[]}
+    info=film.get("info") or {}
+    if not isinstance(info,dict):
+        errors.append("info doit être un objet.")
     fmt=film.get("format") or {}
     if not isinstance(fmt,dict):
         errors.append("format doit être un objet."); fmt={}
@@ -34,6 +37,9 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
     for si,scene in enumerate(scenes):
         if not isinstance(scene,dict):
             errors.append(f"scenes[{si}] doit être un objet."); continue
+        order=scene.get("order",0)
+        if not isinstance(order,(int,float)) or isinstance(order,bool) or not _finite_number(order):
+            errors.append(f"scenes[{si}].order doit être numérique.")
         duration=scene.get("durationSec",0)
         if not _finite_number(duration) or duration<=0:
             errors.append(f"scenes[{si}].durationSec doit être positif et fini.")
@@ -44,6 +50,9 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
         for pi,shot in enumerate(shots):
             if not isinstance(shot,dict):
                 errors.append(f"Plan {si+1}.{pi+1} invalide."); continue
+            order=shot.get("order",0)
+            if not isinstance(order,(int,float)) or isinstance(order,bool) or not _finite_number(order):
+                errors.append(f"Ordre du plan {si+1}.{pi+1} invalide.")
             sid=shot.get("id")
             if sid is not None:
                 if not isinstance(sid,(str,int)) or isinstance(sid,bool):
@@ -55,8 +64,12 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
                 errors.append(f"Plan {si+1}.{pi+1} : inSec/outSec invalides.")
             elif _finite_number(duration):
                 if end>duration: warnings.append(f"Plan {si+1}.{pi+1} dépasse la durée de sa scène et sera tronqué.")
+            media_ref=shot.get("mediaRef")
+            if media_ref is not None and not isinstance(media_ref,str):
+                errors.append(f"Référence média du plan {si+1}.{pi+1} invalide.")
             camera=shot.get("camera") or {}
-            if not isinstance(camera,dict): camera={}
+            if not isinstance(camera,dict):
+                errors.append(f"Caméra du plan {si+1}.{pi+1} invalide."); camera={}
             if camera.get("type","none") not in CAMERAS:
                 warnings.append(f"Caméra inconnue au plan {si+1}.{pi+1} : aucun mouvement appliqué.")
             if not shot.get("mediaRef"): warnings.append(f"Plan {si+1}.{pi+1} sans média : fond noir/neutre.")
@@ -96,4 +109,13 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
         for ci,cue in enumerate(track.get("cues",[])):
             if not isinstance(cue,dict) or not _finite_number(cue.get("startSec")) or not _finite_number(cue.get("endSec")) or cue.get("startSec",0)<0 or cue.get("endSec",0)<=cue.get("startSec",0):
                 errors.append(f"Repère de sous-titre {si+1}.{ci+1} invalide.")
+    render=film.get("render") or {}
+    if not isinstance(render,dict):
+        errors.append("render doit être un objet.")
+    elif render.get("resolution","720p") not in {"720p","1080p","4k"}:
+        errors.append("render.resolution doit être 720p, 1080p ou 4k.")
+    if isinstance(render,dict) and "audioBitrateKbps" in render:
+        bitrate=render["audioBitrateKbps"]
+        if not isinstance(bitrate,int) or isinstance(bitrate,bool) or not 64<=bitrate<=256:
+            errors.append("render.audioBitrateKbps doit être un entier entre 64 et 256.")
     return {"valid":not errors,"errors":errors,"warnings":list(dict.fromkeys(warnings))}
