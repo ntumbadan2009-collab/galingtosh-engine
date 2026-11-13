@@ -22,12 +22,28 @@ async def lifespan(application: FastAPI):
     application.state.supabase = None
     application.state.task_manager = None
 
-    if settings.supabase_service_role_key:
-        db = SupabaseREST(settings.supabase_url, settings.supabase_service_role_key)
-        manager = TaskManager(settings, db)
-        application.state.supabase = db
-        application.state.task_manager = manager
-        worker_task = asyncio.create_task(manager.run(), name="galingtosh-worker")
+    if not settings.supabase_service_role_key:
+        raise RuntimeError(
+            "Démarrage impossible : SUPABASE_SERVICE_ROLE_KEY est absente dans l'environnement Render."
+        )
+
+    db = SupabaseREST(settings.supabase_url, settings.supabase_service_role_key)
+    try:
+        await db.check_auth()
+    except SupabaseError as exc:
+        if exc.status_code == 401:
+            raise RuntimeError(
+                "Authentification Supabase refusée (HTTP 401). Vérifiez SUPABASE_URL "
+                "et SUPABASE_SERVICE_ROLE_KEY dans les variables d'environnement Render."
+            ) from exc
+        raise RuntimeError(
+            f"Vérification initiale Supabase échouée : {exc}"
+        ) from exc
+
+    manager = TaskManager(settings, db)
+    application.state.supabase = db
+    application.state.task_manager = manager
+    worker_task = asyncio.create_task(manager.run(), name="galingtosh-worker")
 
     try:
         yield
