@@ -8,7 +8,13 @@ PATCHABLE_JOB_FIELDS = {"status", "progress", "output_path", "error", "warnings"
 ALLOWED_UPLOAD_BUCKETS = {"renders", "temp-assets"}
 
 class SupabaseError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None, response_body: str = ""):
+        self.status_code = status_code
+        self.response_body = response_body
+        detail = f" HTTP {status_code}" if status_code is not None else ""
+        if response_body:
+            detail += f" — {response_body[:2000]}"
+        super().__init__(f"{message}{detail}")
 
 class SupabaseREST:
     """Client REST minimal, limité au contrat de données Galingtosh."""
@@ -27,8 +33,21 @@ class SupabaseREST:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.request(method, f"{self.base}{path}", headers=headers, **kwargs)
         if response.status_code >= 400:
-            raise SupabaseError("Opération Supabase impossible.")
+            # Le corps aide au diagnostic (PostgREST renvoie code/message/details).
+            # Ne jamais journaliser les en-têtes : ils contiennent la clé service_role.
+            raise SupabaseError(
+                "Opération Supabase impossible.",
+                status_code=response.status_code,
+                response_body=response.text,
+            )
         return response
+
+    async def check_auth(self) -> None:
+        """Vérifie au démarrage que l'URL et la clé accèdent à l'API REST."""
+        await self._request(
+            "GET", "/rest/v1/render_jobs",
+            params={"select": "id", "limit": "0"},
+        )
 
     async def read_film(self, project_id: str, version: int) -> dict:
         params = {"project_id": f"eq.{project_id}", "version": f"eq.{version}", "select": "data"}
