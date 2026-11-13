@@ -11,7 +11,7 @@ from app.api.render import router as render_router
 from app.api.tasks import router as tasks_router
 from app.config import get_settings
 from app.core.task_manager import TaskManager
-from app.storage.supabase import SupabaseREST
+from app.storage.supabase import SupabaseREST, SupabaseError
 
 
 @asynccontextmanager
