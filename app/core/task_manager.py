@@ -193,7 +193,7 @@ class TaskManager:
                     await self.db.patch_render_job(job_id, {"status": "queued", "progress": 0})
             raise
         except Exception:
-            logger.warning("Échec d'une tâche de rendu (détails masqués au client).")
+            logger.exception("Échec de la tâche de rendu %s.", job_id)
             with contextlib.suppress(Exception):
                 job = await self.db.get_render_job(job_id)
                 if job.get("status") == "running":
