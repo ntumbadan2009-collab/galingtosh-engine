@@ -38,7 +38,7 @@ class TaskManager:
         try:
             await self.db.requeue_stale_render_jobs()
         except Exception:
-            logger.warning("Le nettoyage initial des tâches bloquées a échoué.")
+            logger.exception("Échec du nettoyage initial Supabase.")
         last_requeue = asyncio.get_running_loop().time()
         while not self.stop_event.is_set():
             now = asyncio.get_running_loop().time()
@@ -46,7 +46,7 @@ class TaskManager:
                 try:
                     await self.db.requeue_stale_render_jobs()
                 except Exception:
-                    logger.warning("Le nettoyage périodique des tâches bloquées a échoué.")
+                    logger.exception("Échec du nettoyage périodique Supabase.")
                 last_requeue = now
             try:
                 job = await self.db.claim_render_job(self.worker_id)
@@ -56,7 +56,7 @@ class TaskManager:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.warning("Le cycle de récupération des tâches a échoué.")
+                logger.exception("Échec du cycle de récupération des tâches Supabase.")
             self.wake_event.clear()
             try:
                 await asyncio.wait_for(
