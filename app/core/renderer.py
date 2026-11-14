@@ -19,14 +19,36 @@ from app.media.effects import build_video_filters, finish_video
 logger = logging.getLogger("galingtosh.renderer")
 
 def _rss_mb() -> float | None:
+    """RSS cumulé du worker et de ses descendants (notamment FFmpeg)."""
     try:
-        with open("/proc/self/status", encoding="ascii") as status:
-            for line in status:
-                if line.startswith("VmRSS:"):
-                    return round(int(line.split()[1]) / 1024, 1)
-    except (OSError, ValueError, IndexError):
+        proc_root = Path("/proc")
+        ppid_by_pid = {}
+        rss_by_pid = {}
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text(encoding="ascii")
+                fields = stat[stat.rfind(")") + 2:].split()
+                ppid_by_pid[int(entry.name)] = int(fields[1])
+                for line in (entry / "status").read_text(encoding="ascii").splitlines():
+                    if line.startswith("VmRSS:"):
+                        rss_by_pid[int(entry.name)] = int(line.split()[1])
+                        break
+            except (OSError, ValueError, IndexError):
+                continue
+        root = __import__("os").getpid()
+        descendants = {root}
+        changed = True
+        while changed:
+            changed = False
+            for pid, parent in ppid_by_pid.items():
+                if parent in descendants and pid not in descendants:
+                    descendants.add(pid)
+                    changed = True
+        return round(sum(rss_by_pid.get(pid, 0) for pid in descendants) / 1024, 1)
+    except (OSError, ValueError):
         return None
-    return None
 
 def _memory(stage: str) -> None:
     rss = _rss_mb()
