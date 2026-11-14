@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import logging
+import gc
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
@@ -132,6 +133,7 @@ class FilmRenderer:
                     black = work / f"segment_{len(segments):04d}.mp4"
                     await self._black(black, width, height, fps, scene_duration-cursor)
                     segments.append(black); segment_shot_ids.append(None); segment_durations.append(scene_duration-cursor)
+                gc.collect()
                 _memory(f"scene_{scene_index+1}_complete")
             if not segments: raise RenderError("Aucun plan exploitable dans le Film JSON.")
             assembled = work / "assembled.mp4"
