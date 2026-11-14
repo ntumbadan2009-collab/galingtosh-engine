@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import quote
 import httpx
 
-PATCHABLE_JOB_FIELDS = {"status", "progress", "output_path", "error", "warnings", "finished_at"}
+PATCHABLE_JOB_FIELDS = {"status", "progress", "output_path", "error", "warnings", "finished_at", "updated_at"}
 ALLOWED_UPLOAD_BUCKETS = {"renders", "temp-assets"}
 
 class SupabaseError(RuntimeError):
