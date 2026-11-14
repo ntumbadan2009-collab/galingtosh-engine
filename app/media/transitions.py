@@ -34,7 +34,7 @@ async def assemble_segments(segments:list[Path], shot_ids:list[str|None], durati
             elapsed+=max(0.0,float(durations[i]))-d
         else:
             listing=output.parent/f"concat_{i:04d}.txt"
-            listing.write_text("".join(f"file '{p.resolve()}'\\n" for p in (current,next_segment)),encoding="utf-8")
+            listing.write_text("".join(f"file '{p.resolve()}'\n" for p in (current,next_segment)),encoding="utf-8")
             await run_ffmpeg(["-f","concat","-safe","0","-i",str(listing),"-c","copy","-an",str(merged)],timeout=timeout)
             listing.unlink(missing_ok=True)
             elapsed+=max(0.0,float(durations[i]))
