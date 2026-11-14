@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.core.renderer import FilmRenderer, RenderError
+from app.core.renderer import FilmRenderer, RenderError, _rss_mb
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
 from app.media.tts import synthesize_tts_tracks
@@ -84,7 +84,7 @@ class TaskManager:
             if value != last_progress:
                 await self.db.patch_render_job(job_id, {"progress": value, "updated_at": datetime.now(timezone.utc).isoformat()})
                 last_progress = value
-            logger.info("Render job=%s stage=%s progress=%s", job_id, stage, value)
+            logger.info("Render job=%s stage=%s progress=%s rss_tree_mb=%s", job_id, stage, value, _rss_mb())
         render_task = asyncio.create_task(renderer.render(film, media_files, output, on_progress))
         try:
             while not render_task.done():
@@ -101,7 +101,7 @@ class TaskManager:
                         await render_task
                     raise RenderError("La tâche n'est plus active.")
                 await self.db.patch_render_job(job_id, {"progress": last_progress, "updated_at": datetime.now(timezone.utc).isoformat()})
-                logger.info("Render heartbeat job=%s progress=%s", job_id, last_progress)
+                logger.info("Render heartbeat job=%s progress=%s rss_tree_mb=%s", job_id, last_progress, _rss_mb())
             return await render_task
         except asyncio.CancelledError:
             render_task.cancel()
