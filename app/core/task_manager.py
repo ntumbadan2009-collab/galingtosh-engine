@@ -77,7 +77,15 @@ class TaskManager:
         self, job_id: str, renderer: FilmRenderer, film: dict,
         media_files: dict[str, Path], output: Path,
     ) -> dict[str, Any] | None:
-        render_task = asyncio.create_task(renderer.render(film, media_files, output))
+        last_progress = 15
+        async def on_progress(value: int, stage: str) -> None:
+            nonlocal last_progress
+            value = max(last_progress, min(89, int(value)))
+            if value != last_progress:
+                await self.db.patch_render_job(job_id, {"progress": value, "updated_at": datetime.now(timezone.utc).isoformat()})
+                last_progress = value
+            logger.info("Render job=%s stage=%s progress=%s", job_id, stage, value)
+        render_task = asyncio.create_task(renderer.render(film, media_files, output, on_progress))
         try:
             while not render_task.done():
                 await asyncio.sleep(25)
@@ -92,7 +100,8 @@ class TaskManager:
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await render_task
                     raise RenderError("La tâche n'est plus active.")
-                await self.db.patch_render_job(job_id, {"progress": 25})
+                await self.db.patch_render_job(job_id, {"progress": last_progress, "updated_at": datetime.now(timezone.utc).isoformat()})
+                logger.info("Render heartbeat job=%s progress=%s", job_id, last_progress)
             return await render_task
         except asyncio.CancelledError:
             render_task.cancel()
@@ -130,7 +139,7 @@ class TaskManager:
             media_warnings.extend(tts_warnings)
             if await self._is_canceled(job_id):
                 return
-            await self.db.patch_render_job(job_id, {"progress": 15})
+            await self.db.patch_render_job(job_id, {"progress": 15, "updated_at": datetime.now(timezone.utc).isoformat()})
 
             self.current["step"] = "rendu vidéo"
             renderer = FilmRenderer(
