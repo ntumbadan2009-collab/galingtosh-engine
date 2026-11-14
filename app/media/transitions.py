@@ -21,7 +21,7 @@ async def assemble_segments(segments:list[Path], shot_ids:list[str|None], durati
         except (TypeError,ValueError): requested=0.0
         merged=output.parent/f"merge_{i:04d}.mp4"
         use_transition=bool(spec and kind!="cut" and requested>0 and kind in TRANSITION_MAP)
-        d=min(requested,1.0,max(0.0,float(durations[i])-0.05),max(0.0,elapsed-0.05)) if use_transition else 0.0
+        d=min(requested,2.0,max(0.0,float(durations[i])-0.05),max(0.0,elapsed-0.05)) if use_transition else 0.0
         if spec and kind not in TRANSITION_MAP and kind!="cut":
             warnings.append(f"Transition « {kind} » inconnue : coupe franche appliquée.")
         if use_transition and d>=0.05:
