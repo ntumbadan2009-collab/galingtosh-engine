@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Awaitable
 
 from app.core.validator import validate_film
 from app.media.ffmpeg import FFmpegError, probe_media, run_ffmpeg
@@ -13,6 +14,22 @@ from app.media.transitions import assemble_segments
 from app.media.audio import mix_audio
 from app.media.subtitles import write_srt
 from app.media.effects import build_video_filters, finish_video
+
+logger = logging.getLogger("galingtosh.renderer")
+
+def _rss_mb() -> float | None:
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+def _memory(stage: str) -> None:
+    rss = _rss_mb()
+    logger.info("MEM stage=%s rss_mb=%s", stage, rss if rss is not None else "unavailable")
 
 ASPECTS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1), "4:3": (4, 3), "4:5": (4, 5), "21:9": (21, 9)}
 
@@ -29,7 +46,7 @@ def output_size(film: dict[str, Any]) -> tuple[int, int]:
     else:
         aw, ah = ASPECTS.get(aspect, (16, 9))
         resolution = (film.get("render") or {}).get("resolution", "720p")
-        short = {"720p": 720, "1080p": 1080, "4k": 2160}.get(resolution, 720)
+        short = 720
         if aw >= ah: h, w = short, round(short * aw / ah)
         else: w, h = short, round(short * ah / aw)
     return max(2, w - w % 2), max(2, h - h % 2)
@@ -43,7 +60,7 @@ class FilmRenderer:
         self.max_seconds = max_seconds
         self.max_output_mb = max_output_mb
 
-    async def render(self, film: dict[str, Any], media_files: dict[str, Path], output: Path) -> dict[str, Any]:
+    async def render(self, film: dict[str, Any], media_files: dict[str, Path], output: Path, progress_callback: Callable[[int, str], Awaitable[None]] | None = None) -> dict[str, Any]:
         report = validate_film(film)
         if not report["valid"]:
             raise RenderError("Film JSON invalide : " + " ".join(report["errors"][:4]))
@@ -63,7 +80,11 @@ class FilmRenderer:
         segment_shot_ids: list[str | None] = []
         segment_durations: list[float] = []
         try:
+            _memory("render_start")
+            total_shots = max(1, sum(len(s.get("shots", [])) for s in scenes))
+            completed_shots = 0
             for scene_index, scene in enumerate(scenes):
+                _memory(f"scene_{scene_index+1}_start")
                 scene_duration = float(scene.get("durationSec", 0))
                 shots = sorted(scene.get("shots", []), key=lambda x: x.get("order", 0))
                 cursor = 0.0
@@ -102,32 +123,47 @@ class FilmRenderer:
                     segments.append(segment)
                     segment_shot_ids.append(str(shot.get("id")) if shot.get("id") is not None else None)
                     segment_durations.append(duration); cursor = end
+                    completed_shots += 1
+                    _memory(f"scene_{scene_index+1}_shot_{shot_index+1}_done")
+                    if progress_callback:
+                        await progress_callback(min(78, 18 + int(60 * completed_shots / total_shots)), f"plan {completed_shots}/{total_shots}")
                 if cursor < scene_duration:
                     warnings.append(f"Scène {scene_index+1} : fin non couverte, fond noir ajouté.")
                     black = work / f"segment_{len(segments):04d}.mp4"
                     await self._black(black, width, height, fps, scene_duration-cursor)
                     segments.append(black); segment_shot_ids.append(None); segment_durations.append(scene_duration-cursor)
+                _memory(f"scene_{scene_index+1}_complete")
             if not segments: raise RenderError("Aucun plan exploitable dans le Film JSON.")
             assembled = work / "assembled.mp4"
+            _memory("before_incremental_assembly")
             warnings.extend(await assemble_segments(segments, segment_shot_ids, segment_durations,
                 film.get("transitions", []) or [], assembled, fps, self.max_seconds))
+            _memory("after_incremental_assembly")
+            if progress_callback: await progress_callback(82, "assemblage terminé")
             filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height)
             warnings.extend(effect_warnings)
             applied_effect_count = len(filters)
             subtitle_path = work / "captions.srt"
             has_subtitles = write_srt(film.get("subtitles", []) or [], subtitle_path, (film.get("info") or {}).get("language"))
             styled = work / "styled.mp4"
+            _memory("before_effects_subtitles")
             await finish_video(assembled, styled, filters, subtitle_path if has_subtitles else None)
+            _memory("after_effects_subtitles")
+            if progress_callback: await progress_callback(86, "effets et sous-titres terminés")
             audio = film.get("audio") or {}
             has_audio, audio_warnings = await mix_audio(styled, audio.get("tracks") or [], media_files, output,
                 total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128))
             warnings.extend(audio_warnings)
+            _memory("after_audio_mix")
+            if progress_callback: await progress_callback(89, "mixage audio terminé")
             if not has_audio: styled.replace(output)
             size_mb = output.stat().st_size / (1024 * 1024)
             if size_mb > self.max_output_mb:
                 output.unlink(missing_ok=True)
                 raise RenderError(f"Fichier final supérieur à la limite de {self.max_output_mb} Mo.")
+            _memory("before_final_probe")
             probe = await probe_media(str(output))
+            _memory("render_complete")
             streams = probe.get("streams", [])
             video = next((s for s in streams if s.get("codec_type") == "video"), {})
             return {"output": str(output), "duration_seconds": float(probe.get("format", {}).get("duration", 0)),
