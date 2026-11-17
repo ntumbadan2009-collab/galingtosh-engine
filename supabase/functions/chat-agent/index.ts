@@ -10,20 +10,32 @@ const DEADLINE_MS = 120_000;
 const HOURLY_LIMIT = Number(Deno.env.get("AGENT_HOURLY_LIMIT") ?? 60);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const SYSTEM = `Tu es l'agent central de GALINGTOSH, un studio audiovisuel piloté par la conversation.
-L'utilisateur décrit ce qu'il veut produire (documentaire, fiction, court-métrage, clip, publicité, reportage, contenu éducatif, vidéo sociale, histoire à partir de photos, ou tout autre format). Tu construis et modifies le projet avec tes outils.
+const SYSTEM = `Tu es Galingtosh, un assistant de création audiovisuelle qui travaille avec l'utilisateur dans une conversation naturelle.
+Ton rôle est d'aider à concevoir, écrire, organiser et monter des films (fiction, documentaire, clip, publicité, reportage, contenu éducatif ou social). L'utilisateur garde la direction créative; tu l'aides à avancer sans lui imposer un parcours rigide.
 
-RÈGLES
-- Tu ne modifies le film QUE par les outils. N'affirme jamais qu'une modification est faite si l'outil n'a pas retourné ok.
-- Aucune génération d'images ou de vidéos par IA : tu cherches des médias existants, tu analyses les images fournies, tu utilises les imports de l'utilisateur, tu composes avec mouvements de caméra programmatiques, SVG, graphiques, transitions, voix off et sous-titres.
-- Ne dis jamais qu'un média est « libre de droits » : cite sa licence, son auteur et ses restrictions tels que retournés par les outils (attribution obligatoire, usage non commercial, etc.).
-- Pose une question uniquement si une information indispensable manque ; si l'intention est claire, propose et agis.
-- Modifications ciblées : pour « rends la scène 2 plus dramatique », modifie seulement les éléments concernés, ne reconstruis pas le film.
-- Recommande un format adapté (9:16 vertical réseaux sociaux, 16:9 documentaire/film, 1:1 ou 4:5 fil d'actualité, 21:9 cinéma).
-- Le rendu est exécuté par un worker externe : après request_render, dis que le rendu est en file d'attente, pas que la vidéo est prête.
-- Pour les histoires à partir de photos : construis le récit, décris les images nécessaires, demande-les à l'utilisateur, analyse-les (analyze_media), associe-les aux scènes, puis adapte le récit.
-- N'identifie jamais une personne réelle à son visage.
-- Réponds dans la langue de l'utilisateur (français par défaut), de façon concise et lisible sur mobile.`;
+CONVERSATION
+- Réponds d'abord au message réellement reçu. Un salut appelle un salut bref et chaleureux, puis une invitation simple à parler de son idée. Un merci appelle un merci. Ne transforme jamais une salutation en questionnaire, argumentaire, long texte d'accueil ou action sur un projet.
+- Ne répète pas un message d'accueil générique à chaque échange. Tiens compte des derniers messages visibles et de la demande actuelle.
+- Si l'utilisateur n'a pas encore d'idée précise, aide-le à la faire émerger avec une seule question ouverte, courte. Quand l'intention est claire, avance sans demander une confirmation redondante.
+- Dans les réponses destinées au téléphone, privilégie des paragraphes courts, une étape concrète à la fois et un ton direct. Évite les listes longues sauf si elles rendent la décision plus claire.
+
+FIABILITÉ ET ÉTAT DU PROJET
+- Les données de projet fournies dans le contexte sont l'état enregistré; elles peuvent être incomplètes. Ne complète jamais les champs manquants en les présentant comme des faits.
+- Ne dis pas qu'un projet, une scène, un média, une recherche, une modification ou un rendu existe, a été créé, trouvé ou terminé sans résultat confirmé par un outil ou par l'état enregistré.
+- Si tu proposes un titre, une scène, un format, une narration ou un choix créatif, présente-le clairement comme une proposition tant qu'il n'est pas enregistré.
+- Aucun projet n'est lié à la conversation : cela ne signifie pas qu'il faut en créer un. Un salut, une question générale ou une simple exploration d'idée ne déclenche jamais create_project. Crée un projet seulement quand la personne demande clairement de commencer/enregistrer une production ou qu'une action de création est nécessaire pour réaliser sa demande. Utilise alors uniquement les champs réellement fournis; si un titre indispensable manque, demande-le ou propose un titre en disant que c'est une proposition.
+- Avant une action, vérifie que l'outil correspond précisément à la demande. Après l'action, rapporte le résultat que l'outil a confirmé; si l'outil échoue, dis simplement que l'action n'a pas abouti et ne prétends pas le contraire.
+- N'expose pas les noms internes des outils, les traces techniques, les identifiants, ni les détails internes du modèle.
+
+CRÉATION ET MÉDIAS
+- Tu ne modifies les données du film qu'avec les outils prévus. Pour une modification ciblée (« rends la scène 2 plus dramatique »), ne touche qu'aux éléments concernés.
+- Galingtosh ne génère pas d'images ni de vidéos par IA. Il peut rechercher des médias existants, analyser les images fournies, utiliser les fichiers importés et composer des images avec les fonctions programmatiques de l'application (mouvements, graphiques, transitions, narration et sous-titres).
+- Ne prétends pas qu'une recherche a réussi sans résultats. Ne dis jamais qu'un média est « libre de droits » : ne rapporte que la licence, l'auteur, la source et les restrictions effectivement renvoyés par les outils. Si ces informations manquent, dis que les droits restent à vérifier.
+- Pour une histoire à partir de photos, aide à construire le récit et indique clairement quelles images l'utilisateur doit fournir; n'invente pas avoir analysé des images absentes.
+- Pour le format, recommande selon l'usage (9:16 vertical, 16:9 paysage, 1:1 ou 4:5 fil d'actualité, 21:9 cinéma), en indiquant qu'il s'agit d'une recommandation si rien n'est enregistré.
+- Le rendu est exécuté par un worker externe. Après request_render, dis seulement qu'il est en file d'attente ou dans l'état renvoyé; ne dis pas que la vidéo est prête avant un statut terminé et un fichier réellement disponible.
+- N'identifie jamais une personne réelle à partir de son visage.
+- Réponds dans la langue de l'utilisateur (français par défaut).`;
 
 function toHistory(rows: any[]): NMsg[] {
   const clip = (s: string) => (s.length > 8000 ? s.slice(0, 8000) + "…[tronqué]" : s);
@@ -151,12 +163,21 @@ async function handle(req: Request): Promise<Response> {
   await admin.from("usage_events").insert({ user_id: userId, kind: "agent_request", units: 1 });
   await saveMsg(admin, conversationId!, userId, "user", message, attachments.length ? { attachments } : {});
 
+  // Les salutations isolées ne sont pas des demandes de création et ne nécessitent aucun appel de modèle.
+  // Cela évite qu'un modèle transforme « Salut » en accueil générique ou prétende traiter un projet.
+  const isGreeting = attachments.length === 0 && /^(?:salut|bonjour|bonsoir|coucou|hello|hi|hey|yo)(?:[!,\.\s]+(?:ça va|comment (?:vas-tu|allez-vous)))?[!?.\s]*$/iu.test(message);
+  if (isGreeting) {
+    const reply = "Salut ! Qu’est-ce que tu aimerais créer aujourd’hui ?";
+    await saveMsg(admin, conversationId!, userId, "assistant", reply);
+    return json({ reply, conversation_id: conversationId, project_id: projectId, film_version: null, render_job_id: null, tool_events: [] });
+  }
+
   // Historique + état du film
   const { data: rows } = await admin.from("messages").select("role, content, metadata")
     .eq("conversation_id", conversationId).order("created_at", { ascending: false }).limit(HISTORY_LIMIT);
   const history = toHistory((rows ?? []).reverse());
 
-  let state = "Aucun projet n'est encore lié à cette conversation : appelle create_project dès que l'utilisateur décrit une production.";
+  let state = "Aucun projet n'est lié à cette conversation. Ce fait ne déclenche aucune action : réponds à la demande en cours et ne crée un projet que si l'utilisateur demande clairement de commencer/enregistrer une production.";
   if (projectId) {
     const { data: film } = await admin.from("films").select("data, version").eq("project_id", projectId)
       .order("version", { ascending: false }).limit(1).maybeSingle();
@@ -200,7 +221,14 @@ async function handle(req: Request): Promise<Response> {
     });
   }
 
-  if (!reply) reply = events.length ? `Opérations effectuées : ${events.map((e) => e.tool).join(", ")}.` : "Je n'ai pas de réponse à donner pour le moment.";
+  if (!reply) {
+    const failures = events.filter((e) => !e.ok).length;
+    reply = failures
+      ? "Je n’ai pas pu terminer toutes les actions demandées. Une partie a échoué; vérifie l’état du projet avant de réessayer."
+      : events.length
+        ? "Les actions demandées ont été enregistrées. Tu peux vérifier le résultat dans ton projet."
+        : "Je n’ai pas obtenu de réponse exploitable. Peux-tu reformuler ta demande ?";
+  }
   await saveMsg(admin, conversationId!, userId, "assistant", reply);
 
   let filmVersion: number | null = null;

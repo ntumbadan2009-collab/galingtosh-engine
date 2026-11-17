@@ -25,7 +25,7 @@ const tool = (name: string, description: string, properties: Json = {}, required
   ({ name, description, input_schema: { type: "object", properties, required } });
 
 export const TOOLS: ToolDef[] = [
-  tool("create_project", "Crée le projet (et son Film JSON vide) lié à cette conversation. À appeler dès que l'utilisateur décrit une production et qu'aucun projet n'existe.",
+  tool("create_project", "Crée un projet et son Film JSON vide, uniquement quand l'utilisateur demande clairement de commencer/enregistrer une production ou qu'une création est nécessaire pour exécuter sa demande. Ne pas appeler pour un salut, une question générale ou une simple exploration d'idée.",
     { title: S(), type: E(FILM_TYPES), language: S("code langue, ex. fr"), synopsis: S() }, ["title", "type"]),
   tool("get_film", "Retourne le Film JSON complet de la version de travail."),
   tool("set_project_info", "Modifie titre, type, langue ou synopsis.",
