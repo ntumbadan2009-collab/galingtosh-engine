@@ -15,8 +15,8 @@ Moteur de montage audiovisuel déterministe de Galingtosh 2. Le moteur reçoit u
 ## Non pris en charge
 - Modèles 3D et rendu 3D.
 - Génération de médias par IA.
-- TTS : synthèse vocale facultative Edge TTS sans clé API, avec voix par défaut selon la langue. Elle nécessite une connexion Internet et dépend du service distant ; les échecs sont signalés comme avertissements.
-- Rendu 4K/1080p sur Render Free : le moteur refuse les sorties dépassant 2,07 mégapixels (profil mémoire 1080p) ; les ressources CPU/RAM, la durée et la taille peuvent aussi imposer un échec. 720p est le profil recommandé.
+- TTS : synthèse vocale facultative Edge TTS sans clé API, avec voix par défaut selon la langue. Elle nécessite une connexion Internet et dépend du service distant ; une voix demandée mais indisponible fait échouer explicitement le rendu pour éviter une vidéo silencieuse présentée comme complète.
+- Rendu 4K sur Render Free : le moteur refuse les sorties dépassant 2,07 mégapixels (profil mémoire 1080p) ; les ressources CPU/RAM, la durée et la taille peuvent aussi imposer un échec. 720p est le profil recommandé.
 - Effets ou transitions non répertoriés : avertissement et comportement de repli.
 
 ## Déploiement
@@ -39,3 +39,11 @@ Le moteur utilise uniquement les tables, colonnes, RPC et buckets décrits dans 
 
 ## Tests
 GitHub Actions installe Python 3.12 et FFmpeg, puis exécute `pytest -q` à chaque push et pull request. Pour un test local : installer FFmpeg/ffprobe, installer `requirements.txt`, puis lancer `pytest -q`. Les tests Supabase en direct nécessitent un projet et des données de test dédiés.
+
+
+## Correctifs du 17 novembre 2026
+Les migrations et fonctions Edge sont maintenant versionnées dans `supabase/`. La migration additive `20261117190000_consistent_project_workflow.sql` a été appliquée au projet Galingtosh 2. Elle ajoute la création atomique projet/film, la journalisation atomique des opérations et leur annulation, le verrouillage des versions envoyées au rendu, la réutilisation des rendus actifs et l’annulation utilisateur.
+
+Le worker maintient son bail pendant toute la production, vérifie son identité avant chaque écriture et refuse de livrer un rendu dont un média référencé ou une narration demandée est indisponible. Les transitions préservent la durée du montage en prolongeant la dernière image sortante pendant le recouvrement ; `inSec` positionne un plan dans sa scène, tandis que `sourceInSec` désigne un éventuel point d’entrée dans le fichier source.
+
+Validation locale : 50 tests Python avec FFmpeg, 4 tests Deno des opérations du film et vérification TypeScript des fonctions. Les tests transactionnels sur Supabase (création, conflit de révision, version figée, dédoublonnage, annulation) ont été exécutés avec rollback.

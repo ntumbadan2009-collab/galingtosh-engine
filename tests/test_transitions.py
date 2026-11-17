@@ -7,7 +7,7 @@ from app.media.ffmpeg import probe_media
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg/ffprobe requis")
 
 @pytest.mark.asyncio
-async def test_dissolve_transition_shortens_timeline(tmp_path):
+async def test_dissolve_transition_preserves_timeline(tmp_path):
     clips=[]
     for name,color in [("one","red"),("two","blue")]:
         path=tmp_path/f"{name}.mp4"
@@ -20,5 +20,6 @@ async def test_dissolve_transition_shortens_timeline(tmp_path):
     info=await probe_media(str(output))
     duration=float(info["format"]["duration"])
     assert output.is_file()
-    assert duration == pytest.approx(1.75,abs=0.15)
+    assert duration == pytest.approx(2.0,abs=0.15)
     assert warnings == []
+

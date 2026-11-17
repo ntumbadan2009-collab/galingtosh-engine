@@ -1,4 +1,5 @@
 import shutil
+import os
 import subprocess
 from fastapi import APIRouter
 from app.config import get_settings
@@ -7,7 +8,7 @@ router=APIRouter()
 
 @router.get("/health")
 async def health():
-    return {"status":"ok","service":"galingtosh-engine"}
+    return {"status":"ok","service":"galingtosh-engine","revision":os.getenv("RENDER_GIT_COMMIT", "local"),"workflow_version":2}
 
 @router.get("/capabilities")
 async def capabilities():
@@ -28,3 +29,4 @@ async def capabilities():
         "graphics":{"charts":True,"svg":True,"3d":False},"tts":{"providers":["edge-tts"],"status":"available"},
         "limits":{"max_render_seconds":settings.max_render_seconds,"max_output_mb":settings.max_output_mb,
             "resolutions":["720p","1080p"],"max_pixels":2073600,"concurrent_renders":1}}
+

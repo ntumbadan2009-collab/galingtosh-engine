@@ -1,5 +1,7 @@
 from __future__ import annotations
 import re
+import asyncio
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -20,20 +22,22 @@ async def synthesize_tts_tracks(film: dict[str, Any], workdir: Path) -> tuple[di
             continue
         spec=track["tts"]
         provider=str(spec.get("provider") or "edge-tts").lower()
-        if provider!="edge-tts":
+        if provider not in {"edge-tts", "default"}:
             warnings.append(f"Fournisseur TTS « {provider} » non pris en charge."); continue
         text=str(spec.get("text") or "").strip()
         if not text or len(text)>4000:
             warnings.append(f"Texte TTS invalide ou trop long pour la piste {track.get('id',index+1)}."); continue
         language=str(spec.get("language") or (film.get("info") or {}).get("language") or "fr").split("-")[0].lower()
         voice=str(spec.get("voice") or DEFAULT_VOICES.get(language,DEFAULT_VOICES["fr"]))
+        if voice == "default" or re.fullmatch(r"[a-z]{2}-[A-Z]{2}-Standard-[A-Z]", voice):
+            voice = DEFAULT_VOICES.get(language, DEFAULT_VOICES["fr"])
         if not re.fullmatch(r"[A-Za-z0-9-]{2,80}",voice):
             warnings.append(f"Voix TTS invalide pour la piste {track.get('id',index+1)}."); continue
         media_id=str(track.get("id") or f"tts-{index+1}")
-        destination=workdir/f"{media_id.replace('/','_')}.tts.mp3"
+        destination=workdir/f"{hashlib.sha256(media_id.encode()).hexdigest()[:24]}.tts.mp3"
         try:
             communicator=edge_tts.Communicate(text,voice)
-            await communicator.save(str(destination))
+            await asyncio.wait_for(communicator.save(str(destination)), timeout=90)
             if not destination.is_file() or destination.stat().st_size==0:
                 raise RuntimeError("Fichier TTS vide.")
             generated[media_id]=destination
@@ -42,3 +46,4 @@ async def synthesize_tts_tracks(film: dict[str, Any], workdir: Path) -> tuple[di
             destination.unlink(missing_ok=True)
             warnings.append(f"Échec de synthèse vocale pour la piste {track.get('id',index+1)}.")
     return generated,warnings
+

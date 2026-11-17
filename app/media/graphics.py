@@ -94,7 +94,7 @@ def sanitize_svg_to_png(source: Path, destination: Path) -> None:
     upper = raw.upper()
     if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
         raise GraphicsError("Déclaration XML interdite.")
-    if b"url(" in upper or b"@IMPORT" in upper:
+    if b"URL(" in upper or b"@IMPORT" in upper:
         raise GraphicsError("Référence CSS externe interdite.")
     try:
         root = ET.fromstring(raw)
@@ -113,3 +113,4 @@ def sanitize_svg_to_png(source: Path, destination: Path) -> None:
             if "url(" in value.lower():
                 raise GraphicsError("Référence SVG externe interdite.")
     cairosvg.svg2png(bytestring=raw, write_to=str(destination), output_width=1920, output_height=1080)
+

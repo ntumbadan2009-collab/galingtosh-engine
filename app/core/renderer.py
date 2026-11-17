@@ -69,7 +69,7 @@ def output_size(film: dict[str, Any]) -> tuple[int, int]:
     else:
         aw, ah = ASPECTS.get(aspect, (16, 9))
         resolution = (film.get("render") or {}).get("resolution", "720p")
-        short = 720
+        short = {"720p": 720, "1080p": 1080, "4k": 2160}.get(resolution, 720)
         if aw >= ah: h, w = short, round(short * aw / ah)
         else: w, h = short, round(short * ah / aw)
     return max(2, w - w % 2), max(2, h - h % 2)
@@ -139,7 +139,7 @@ class FilmRenderer:
                             camera = ((shot.get("camera") or {}).get("type") or "none")
                             await normalize_image(source, segment, width, height, fps, duration, camera)
                         elif kind == "video" or source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
-                            await normalize_video(source, segment, width, height, fps, start, duration, ((shot.get("camera") or {}).get("type") or "none"))
+                            await normalize_video(source, segment, width, height, fps, float(shot.get("sourceInSec", 0)), duration, ((shot.get("camera") or {}).get("type") or "none"))
                         else:
                             warnings.append(f"Type de média non visuel pour le plan {shot_index+1}.")
                             await self._black(segment, width, height, fps, duration)
@@ -164,7 +164,15 @@ class FilmRenderer:
                 film.get("transitions", []) or [], assembled, fps, self.max_seconds))
             _memory("after_incremental_assembly")
             if progress_callback: await progress_callback(82, "assemblage terminé")
-            filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height)
+            targets = {}
+            offset = 0.0
+            for scene in scenes:
+                length = float(scene.get("durationSec", 0))
+                targets[str(scene.get("id"))] = (offset, offset+length)
+                for shot in scene.get("shots", []):
+                    targets[str(shot.get("id"))] = (offset+float(shot.get("inSec",0)), offset+min(length,float(shot.get("outSec",length))))
+                offset += length
+            filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height, targets)
             warnings.extend(effect_warnings)
             applied_effect_count = len(filters)
             subtitle_path = work / "captions.srt"
@@ -204,3 +212,4 @@ class FilmRenderer:
         await run_ffmpeg(["-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r={fps}",
             "-t", str(duration), "-an", "-c:v", "libx264", "-preset", "ultrafast",
             "-threads", "1", "-pix_fmt", "yuv420p", str(destination)])
+

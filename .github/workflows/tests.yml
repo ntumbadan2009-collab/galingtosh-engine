@@ -34,3 +34,13 @@ jobs:
           pip install -r requirements.txt
       - name: Run tests
         run: pytest -q
+
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Test film operations
+        run: deno test supabase/functions/chat-agent/film_test.ts
+      - name: Check Edge functions
+        run: deno check supabase/functions/chat-agent/index.ts supabase/functions/request-render/index.ts supabase/functions/search-media/index.ts

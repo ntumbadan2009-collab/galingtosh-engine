@@ -88,11 +88,16 @@ class SupabaseREST:
             raise SupabaseError("Tâche de rendu introuvable.")
         return rows[0]
 
-    async def patch_render_job(self, job_id: str, fields: dict) -> None:
+    async def patch_render_job(self, job_id: str, fields: dict, worker_id: str | None = None) -> None:
         if not fields or set(fields) - PATCHABLE_JOB_FIELDS:
             raise SupabaseError("Champs de mise à jour de tâche interdits.")
-        await self._request("PATCH", "/rest/v1/render_jobs", params={"id": f"eq.{job_id}"},
-                            json=fields, headers={**self._headers(), "Prefer": "return=minimal"})
+        params = {"id": f"eq.{job_id}"}
+        if worker_id:
+            params.update({"worker_id": f"eq.{worker_id}", "status": "eq.running"})
+        response = await self._request("PATCH", "/rest/v1/render_jobs", params=params,
+                            json=fields, headers={"Prefer": "return=representation"})
+        if worker_id and not response.json():
+            raise SupabaseError("La tâche a été annulée ou réattribuée.")
 
     async def upload_file(self, bucket: str, object_path: str, source: Path,
                           content_type: str = "application/octet-stream") -> None:
@@ -104,10 +109,14 @@ class SupabaseREST:
         if not source.is_file() or source.stat().st_size > 50 * 1024 * 1024:
             raise SupabaseError("Fichier de rendu absent ou trop volumineux.")
         url = f"{self.base}/storage/v1/object/{bucket}/{quote(clean, safe='/')}"
-        with source.open("rb") as stream:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
-                response = await client.post(url, headers={**self._headers(), "x-upsert": "true",
-                    "Content-Type": content_type}, content=stream)
+        async def chunks():
+            with source.open("rb") as stream:
+                while chunk := stream.read(64 * 1024):
+                    yield chunk
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
+            response = await client.post(url, headers={**self._headers(), "x-upsert": "true",
+                "Content-Type": content_type}, content=chunks())
         if response.status_code >= 400:
             raise SupabaseError("Envoi du fichier rendu impossible.")
 
@@ -154,3 +163,4 @@ def validate_upload_path(storage_path: str, user_id: str) -> str:
     if any(part in {"", ".", ".."} or "\x00" in part for part in parts):
         raise SupabaseError("Chemin de média privé invalide.")
     return raw
+

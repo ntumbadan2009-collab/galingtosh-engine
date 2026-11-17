@@ -26,12 +26,12 @@ async def assemble_segments(segments:list[Path], shot_ids:list[str|None], durati
             warnings.append(f"Transition « {kind} » inconnue : coupe franche appliquée.")
         if use_transition and d>=0.05:
             await run_ffmpeg(["-i",str(current),"-i",str(next_segment),"-filter_complex",
-                f"[0:v]settb=AVTB,setpts=PTS-STARTPTS,fps={fps},format=yuv420p[a];"
+                f"[0:v]tpad=stop_mode=clone:stop_duration={d:.4f},settb=AVTB,setpts=PTS-STARTPTS,fps={fps},format=yuv420p[a];"
                 f"[1:v]settb=AVTB,setpts=PTS-STARTPTS,fps={fps},format=yuv420p[b];"
-                f"[a][b]xfade=transition={TRANSITION_MAP[kind]}:duration={d:.4f}:offset={elapsed-d:.4f}[v]",
+                f"[a][b]xfade=transition={TRANSITION_MAP[kind]}:duration={d:.4f}:offset={elapsed:.4f}[v]",
                 "-map","[v]","-an","-c:v","libx264","-preset","ultrafast","-threads","1",
                 "-pix_fmt","yuv420p","-r",str(fps),str(merged)],timeout=timeout)
-            elapsed+=max(0.0,float(durations[i]))-d
+            elapsed+=max(0.0,float(durations[i]))
         else:
             listing=output.parent/f"concat_{i:04d}.txt"
             listing.write_text("".join(f"file '{p.resolve()}'\n" for p in (current,next_segment)),encoding="utf-8")
@@ -44,3 +44,4 @@ async def assemble_segments(segments:list[Path], shot_ids:list[str|None], durati
     if current != output:
         current.replace(output)
     return warnings
+
