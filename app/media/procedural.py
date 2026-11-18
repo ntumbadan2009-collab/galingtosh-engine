@@ -1,4 +1,4 @@
-"""Quiet, deterministic instrumental bed; no external music API or samples."""
+"""Procedural note sequencer and sound effects; no external API or samples."""
 from __future__ import annotations
 
 import math
@@ -8,10 +8,11 @@ import random
 from pathlib import Path
 
 RATE = 16000
-MOODS = {
-    "calm": (0, 3, 7), "hopeful": (0, 4, 7),
-    "tense": (0, 1, 7), "sad": (0, 3, 8),
-    "wonder": (0, 5, 7), "neutral": (0, 4, 7),
+# MIDI note numbers for small triads; the Python synthesizer renders them to WAV.
+MIDI_CHORDS = {
+    "calm": (45, 48, 52), "hopeful": (45, 49, 52),
+    "tense": (45, 46, 52), "sad": (45, 48, 53),
+    "wonder": (45, 50, 52), "neutral": (43, 47, 50),
 }
 
 
@@ -36,9 +37,9 @@ def compose_bed(scenes: list[dict], cues: list[dict], output: Path) -> bool:
             cue = by_scene.get(str(scene.get("id")), {})
             mood = cue.get("mood", "silence")
             intensity = float(cue.get("intensity", 0))
-            notes = MOODS.get(mood)
+            notes = MIDI_CHORDS.get(mood)
             # A soft pad with moving harmonics; bounded level leaves narration room.
-            frequencies = [110 * 2 ** (n / 12) for n in notes] if notes else []
+            frequencies = [440 * 2 ** ((note - 69) / 12) for note in notes] if notes else []
             for begin in range(0, count, RATE):
                 end = min(count, begin + RATE)
                 block = bytearray((end - begin) * 2)

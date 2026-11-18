@@ -272,7 +272,7 @@ const ADAPTERS: Record<string, { env?: string; kinds: string[]; fn: (q: Q) => Pr
   polyhaven: { kinds: ["model3d"], fn: polyhaven },
 };
 
-export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "audio", "model3d"];
+export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "model3d"];
 export const MEDIA_SOURCES = Object.keys(ADAPTERS);
 
 export async function searchMedia(

@@ -1,6 +1,6 @@
 // Registre d'outils de l'agent + exécuteur. Toute modification du film passe par applyOperation(),
 // versionnée (rev) et journalisée dans film_operations (annulation possible).
-import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, AUDIO_KINDS, type Json } from "./film.ts";
+import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from "./film.ts";
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 
@@ -53,8 +53,8 @@ export const TOOLS: ToolDef[] = [
   tool("add_effect", "Ajoute un effet pris en charge : fade_in, fade_out, grayscale, vignette, text_overlay. params : text, position (top/center/bottom), fontSize, durationSec. target : film, id de scène ou de plan.",
     { type: S(), target: S("id de scène/plan/piste ou 'film'"), params: { type: "object" } }, ["type", "target"]),
   tool("remove_effect", "Supprime un effet.", { effect_id: S() }, ["effect_id"]),
-  tool("add_audio_track", "Ajoute une piste audio : fichier ou voix off. Pour un effet sfx, fournis expectedContent et jusqu’à 3 candidats audio issus de search_media; le moteur les écoute avec CLAP local, rejette les échecs et essaie un effet procédural pris en charge en dernier recours.",
-    { kind: E(AUDIO_KINDS), mediaRef: S(), expectedContent: S(), candidateMediaRefs: { type: "array", maxItems: 3, items: S() }, tts: { type: "object", properties: { text: S(), provider: S(), voice: S(), language: S() }, required: ["text"] },
+  tool("add_audio_track", "Ajoute une voix off ou une piste procédurale. Pour un effet sfx, donne expectedContent (pas, impact, pluie, vent ou whoosh) et ses événements temporels; le moteur le synthétise en Python, sans banque de sons ni CLAP. Les demandes non prises en charge sont omises avec un avertissement.",
+    { kind: E(["voiceover", "dialogue", "sfx"]), mediaRef: S("référence d'un fichier audio du projet pour narration/dialogue; ne pas utiliser pour sfx"), expectedContent: S(), tts: { type: "object", properties: { text: S(), provider: S(), voice: S(), language: S() }, required: ["text"] },
       events: { type: "array", items: { type: "object", properties: { startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } }, volumeDb: N() }, ["kind"]),
   tool("remove_audio_track", "Supprime une piste audio.", { track_id: S() }, ["track_id"]),
   tool("update_audio_track", "Corrige localement volume ou placement d'une piste existante, sans modifier les autres pistes.",

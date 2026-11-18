@@ -97,9 +97,6 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
     for ti,track in enumerate(tracks):
         if not isinstance(track,dict): errors.append(f"Piste audio {ti+1} invalide."); continue
         if track.get("kind")=="sfx":
-            refs=track.get("candidateMediaRefs",[])
-            if not isinstance(refs,list) or not 1<=len(refs)<=3 or any(not isinstance(r,str) for r in refs):
-                errors.append(f"Effet audio {ti+1} : fournir de 1 à 3 médias candidats.")
             if not isinstance(track.get("expectedContent"),str) or not track["expectedContent"].strip():
                 errors.append(f"Effet audio {ti+1} : expectedContent doit décrire le son attendu.")
             if not track.get("events"):

@@ -257,15 +257,11 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
     }
     case "add_audio_track": {
       const kind = oneOf(a.kind, "kind", AUDIO_KINDS);
-      if (!a.mediaRef && !a.tts) fail("Une piste audio exige mediaRef (fichier) ou tts (voix off synthétisée)");
+      if (kind !== "sfx" && !a.mediaRef && !a.tts) fail("Une piste audio exige mediaRef (fichier) ou tts (voix off synthétisée)");
       const t: Json = { id: nid("au"), kind, events: [] };
       if (a.mediaRef) { mediaIn(f, a.mediaRef); t.mediaRef = a.mediaRef; }
       if (kind === "sfx") {
         t.expectedContent = str(a.expectedContent, "expectedContent", 300);
-        const refs = a.candidateMediaRefs ?? (a.mediaRef ? [a.mediaRef] : []);
-        if (!Array.isArray(refs) || refs.length > 3 || refs.length === 0) fail("Une piste sfx doit contenir de 1 à 3 candidats audio.");
-        for (const ref of refs) mediaIn(f, str(ref, "candidateMediaRefs[]", 100));
-        t.candidateMediaRefs = [...new Set(refs)];
         if (!Array.isArray(a.events) || a.events.length === 0) fail("Une piste sfx exige au moins un événement avec son emplacement et sa durée.");
       }
       if (a.tts) {
