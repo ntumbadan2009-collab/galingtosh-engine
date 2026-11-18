@@ -6,6 +6,20 @@ from app.config import get_settings
 
 router=APIRouter()
 
+@router.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+async def service_root():
+    """Give the public service URL a truthful status page instead of a 404."""
+    return {
+        "service": "galingtosh-engine",
+        "status": "running",
+        "message": "API de rendu audiovisuel; ce service ne fournit pas l'application mobile.",
+        "endpoints": {
+            "health": "/health",
+            "capabilities": "/capabilities",
+            "documentation": "/docs",
+        },
+    }
+
 @router.get("/health")
 async def health():
     return {"status":"ok","service":"galingtosh-engine","revision":os.getenv("RENDER_GIT_COMMIT", "local"),"workflow_version":2}
@@ -29,4 +43,3 @@ async def capabilities():
         "graphics":{"charts":True,"svg":True,"3d":False},"tts":{"providers":["edge-tts"],"status":"available"},
         "limits":{"max_render_seconds":settings.max_render_seconds,"max_output_mb":settings.max_output_mb,
             "resolutions":["720p","1080p"],"max_pixels":2073600,"concurrent_renders":1}}
-
