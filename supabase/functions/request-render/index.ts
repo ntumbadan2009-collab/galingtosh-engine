@@ -1,7 +1,26 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, json } from "./cors.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ENGINE_ROOT = Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com";
+
+async function wakeRenderEngine(): Promise<void> {
+  try {
+    const response = await fetch(`${ENGINE_ROOT.replace(/\/$/, "")}/`, {
+      method: "GET",
+      signal: AbortSignal.timeout(120_000),
+    });
+    await response.body?.cancel();
+    if (!response.ok) {
+      console.warn(`Le réveil du moteur Render a répondu HTTP ${response.status}.`);
+    } else {
+      console.info("Le moteur Render a été réveillé après la mise en file du rendu.");
+    }
+  } catch (error) {
+    console.warn("Le réveil du moteur Render a échoué; la tâche reste en file.", error);
+  }
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -28,10 +47,10 @@ Deno.serve(async (req) => {
 
     const { data: jobId, error } = await admin.rpc("queue_render", { p_user_id: userId, p_project_id: projectId });
     if (error) return json({ error: error.message }, 422);
+    EdgeRuntime.waitUntil(wakeRenderEngine());
     return json({ job_id: jobId, status: "queued" });
   } catch (e) {
     console.error(e);
     return json({ error: "Erreur interne" }, 500);
   }
 });
-
