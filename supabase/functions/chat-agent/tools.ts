@@ -64,6 +64,7 @@ export const TOOLS: ToolDef[] = [
   tool("add_found_media", "Enregistre dans le projet un résultat de search_media (par son result_id) avec sa provenance, et l'attache éventuellement à un plan.",
     { result_id: S(), shot_id: S() }, ["result_id"]),
   tool("list_media", "Liste les médias du projet (imports de l'utilisateur et médias trouvés) avec leur analyse."),
+  tool("register_uploaded_media", "Ajoute au Film JSON un média déjà importé par l'utilisateur, sans l'affecter à un plan. À utiliser si l'utilisateur demande de rattacher son fichier au projet mais n'a pas choisi de plan. Ne dis pas que le média est monté dans une scène : il est seulement enregistré dans les médias du film.", { media_asset_id: S() }, ["media_asset_id"]),
   tool("attach_media", "Attache un média existant du projet (media_asset_id) à un plan.", { shot_id: S(), media_asset_id: S() }, ["shot_id", "media_asset_id"]),
   tool("analyze_media", "Analyse une image du projet par vision (description, tags, personnes décrites, lieux, couleurs) et enregistre l'analyse. Lecture seule : aucune image n'est générée.",
     { media_asset_id: S() }, ["media_asset_id"]),
@@ -185,6 +186,11 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           .eq("project_id", ctx.projectId).eq("user_id", ctx.userId).order("created_at");
         if (error) throw new Error(error.message);
         return { output: { media: data } };
+      }
+      case "register_uploaded_media": {
+        const row = await loadAsset(ctx, args.media_asset_id);
+        const result = await mutateFilm(ctx, "register_media", { media: mediaRefFromRow(row) });
+        return { output: { ok: true, ...result, media_asset_id: row.id, registered_in_film: true, attached_to_shot: false } };
       }
       case "add_found_media": {
         const rid = String(args.result_id ?? "");

@@ -18,6 +18,11 @@ CONVERSATION
 - Ne répète pas un message d'accueil générique à chaque échange. Tiens compte des derniers messages visibles et de la demande actuelle.
 - Si l'utilisateur n'a pas encore d'idée précise, aide-le à la faire émerger avec une seule question ouverte, courte. Quand l'intention est claire, avance sans demander une confirmation redondante.
 - Dans les réponses destinées au téléphone, privilégie des paragraphes courts, une étape concrète à la fois et un ton direct. Évite les listes longues sauf si elles rendent la décision plus claire.
+- Si le message est seulement un acquiescement (« ok », « d’accord », « compris »), réponds brièvement et ne relance pas une analyse technique ni une nouvelle action.
+- Une proposition de réponse écrite avant l'exécution d'un outil n'est pas une action accomplie. Attends le résultat de l'outil avant d'annoncer ce qui a été fait.
+- N'explique jamais le fonctionnement de l'application, ses schémas de paramètres ou ses erreurs internes. Reformule les limites en une phrase utile à l'utilisateur, puis propose une seule prochaine étape.
+- Lorsqu'une image ou un fichier est joint, base tes observations sur son analyse réellement disponible. N'invente ni sujet visuel, ni analyse, ni média trouvé. Si l'analyse manque, demande ou lance l'analyse avant de décrire le média.
+- Ne propose pas une liste de formats ou d'idées génériques après un simple import. Réponds à la demande associée au fichier; si elle est absente, pose une seule question courte.
 
 FIABILITÉ ET ÉTAT DU PROJET
 - Les données de projet fournies dans le contexte sont l'état enregistré; elles peuvent être incomplètes. Ne complète jamais les champs manquants en les présentant comme des faits.
@@ -32,6 +37,7 @@ CRÉATION ET MÉDIAS
 - Galingtosh ne génère pas d'images ni de vidéos par IA. Il peut rechercher des médias existants, analyser les images fournies, utiliser les fichiers importés et composer des images avec les fonctions programmatiques de l'application (mouvements, graphiques, transitions, narration et sous-titres).
 - Ne prétends pas qu'une recherche a réussi sans résultats. Ne dis jamais qu'un média est « libre de droits » : ne rapporte que la licence, l'auteur, la source et les restrictions effectivement renvoyés par les outils. Si ces informations manquent, dis que les droits restent à vérifier.
 - Pour une histoire à partir de photos, aide à construire le récit et indique clairement quelles images l'utilisateur doit fournir; n'invente pas avoir analysé des images absentes.
+- Un fichier joint est d'abord un média importé dans le projet, pas une scène ou un plan. Pour l'ajouter au film sans plan cible, utilise l'action d'ajout de média importé; ne dis pas qu'il est placé dans le montage tant qu'un plan n'a pas confirmé cette association.
 - Pour le format, recommande selon l'usage (9:16 vertical, 16:9 paysage, 1:1 ou 4:5 fil d'actualité, 21:9 cinéma), en indiquant qu'il s'agit d'une recommandation si rien n'est enregistré.
 - Le rendu est exécuté par un worker externe. Après request_render, dis seulement qu'il est en file d'attente ou dans l'état renvoyé; ne dis pas que la vidéo est prête avant un statut terminé et un fichier réellement disponible.
 - N'identifie jamais une personne réelle à partir de son visage.
@@ -172,6 +178,15 @@ async function handle(req: Request): Promise<Response> {
     return json({ reply, conversation_id: conversationId, project_id: projectId, film_version: null, render_job_id: null, tool_events: [] });
   }
 
+  const acknowledgement = message.toLocaleLowerCase("fr")
+    .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
+    .replace(/[!,?.…\s]+/g, " ").trim();
+  if (attachments.length === 0 && /^(?:ok|okay|d accord|daccord|entendu|compris|parfait|super|merci)$/.test(acknowledgement)) {
+    const reply = acknowledgement === "merci" ? "Avec plaisir !" : "D’accord.";
+    await saveMsg(admin, conversationId!, userId, "assistant", reply);
+    return json({ reply, conversation_id: conversationId, project_id: projectId, film_version: null, render_job_id: null, tool_events: [] });
+  }
+
   // Historique + état du film
   const { data: rows } = await admin.from("messages").select("role, content, metadata")
     .eq("conversation_id", conversationId).order("created_at", { ascending: false }).limit(HISTORY_LIMIT);
@@ -199,8 +214,10 @@ async function handle(req: Request): Promise<Response> {
       if (!res.toolCalls.length) { reply = res.text; break; }
 
       const calls = res.toolCalls.map((c, i) => ({ ...c, id: c.id || `call_${step}_${i}` }));
-      history.push({ role: "assistant", content: res.text, tool_calls: calls });
-      await saveMsg(admin, conversationId!, userId, "assistant", res.text, { tool_calls: calls });
+      // Keep tool-call preambles out of the visible transcript: a model can say
+      // "I will do it" before the tool has actually succeeded.
+      history.push({ role: "assistant", content: "", tool_calls: calls });
+      await saveMsg(admin, conversationId!, userId, "assistant", "", { tool_calls: calls });
 
       for (const c of calls) {
         const out = await execTool(ctx, c.name, c.args ?? {});
@@ -228,6 +245,12 @@ async function handle(req: Request): Promise<Response> {
       : events.length
         ? "Les actions demandées ont été enregistrées. Tu peux vérifier le résultat dans ton projet."
         : "Je n’ai pas obtenu de réponse exploitable. Peux-tu reformuler ta demande ?";
+  }
+  if (TOOLS.some((t) => reply.toLowerCase().includes(t.name.toLowerCase())) || /\b(?:shot_id|media_asset_id|tool_call_id|tool_calls|conversation_id)\b/i.test(reply)) {
+    const failedAttachment = events.some((e) => e.tool === "attach_media" && !e.ok);
+    reply = failedAttachment
+      ? "Je n’ai pas pu placer ce média dans le montage : aucun plan n’a été ciblé. Le fichier reste dans les médias du projet. Choisis un plan ou demande-moi d’en créer un."
+      : "Je n’ai pas pu terminer cette étape correctement. Vérifie le résultat dans ton projet avant de réessayer.";
   }
   await saveMsg(admin, conversationId!, userId, "assistant", reply);
 
