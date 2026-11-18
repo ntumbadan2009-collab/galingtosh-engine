@@ -260,6 +260,14 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       if (!a.mediaRef && !a.tts) fail("Une piste audio exige mediaRef (fichier) ou tts (voix off synthétisée)");
       const t: Json = { id: nid("au"), kind, events: [] };
       if (a.mediaRef) { mediaIn(f, a.mediaRef); t.mediaRef = a.mediaRef; }
+      if (kind === "sfx") {
+        t.expectedContent = str(a.expectedContent, "expectedContent", 300);
+        const refs = a.candidateMediaRefs ?? (a.mediaRef ? [a.mediaRef] : []);
+        if (!Array.isArray(refs) || refs.length > 3 || refs.length === 0) fail("Une piste sfx doit contenir de 1 à 3 candidats audio.");
+        for (const ref of refs) mediaIn(f, str(ref, "candidateMediaRefs[]", 100));
+        t.candidateMediaRefs = [...new Set(refs)];
+        if (!Array.isArray(a.events) || a.events.length === 0) fail("Une piste sfx exige au moins un événement avec son emplacement et sa durée.");
+      }
       if (a.tts) {
         t.tts = {
           provider: a.tts.provider ?? "edge-tts", voice: a.tts.voice ?? "default",
@@ -278,6 +286,39 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const n = f.audio.tracks.length;
       f.audio.tracks = f.audio.tracks.filter((t: Json) => t.id !== a.track_id);
       if (f.audio.tracks.length === n) fail(`Piste audio introuvable : ${a.track_id}`);
+      break;
+    }
+    case "update_audio_track": {
+      const t = f.audio.tracks.find((x: Json) => x.id === req(a, "track_id"));
+      if (!t) fail(`Piste audio introuvable : ${a.track_id}`);
+      if (a.volumeDb !== undefined) t.volumeDb = numIn(a.volumeDb, "volumeDb", -60, 12);
+      if (a.events !== undefined) {
+        if (!Array.isArray(a.events) || a.events.length > 100) fail("events invalide (max 100)");
+        t.events = a.events.map((e: Json, i: number) => ({ id: e.id ?? nid("ev"),
+          startSec: numIn(e.startSec, `events[${i}].startSec`, 0, 36000),
+          durationSec: numIn(e.durationSec, `events[${i}].durationSec`, 0.05, 36000) }));
+      }
+      break;
+    }
+    case "set_procedural_music": {
+      const music = f.audio.proceduralMusic ?? { enabled: false, volumeDb: -15, cues: [] };
+      if (a.enabled !== undefined) {
+        if (typeof a.enabled !== "boolean") fail("enabled doit être booléen");
+        music.enabled = a.enabled;
+      }
+      if (a.volumeDb !== undefined) music.volumeDb = numIn(a.volumeDb, "volumeDb", -60, 0);
+      f.audio.proceduralMusic = music;
+      break;
+    }
+    case "set_scene_music": {
+      findScene(f, req(a, "scene_id"));
+      const mood = oneOf(a.mood, "mood", ["silence", "calm", "hopeful", "tense", "sad", "wonder", "neutral"]);
+      const intensity = mood === "silence" ? 0 : numIn(a.intensity ?? 0.45, "intensity", 0, 1);
+      const music = f.audio.proceduralMusic ?? { enabled: true, volumeDb: -15, cues: [] };
+      music.enabled = true;
+      music.cues = (music.cues ?? []).filter((c: Json) => c.sceneId !== a.scene_id);
+      music.cues.push({ sceneId: a.scene_id, mood, intensity });
+      f.audio.proceduralMusic = music;
       break;
     }
     case "update_subtitles": {

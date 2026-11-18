@@ -16,6 +16,8 @@ from app.core.renderer import FilmRenderer, RenderError, _rss_mb
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
 from app.media.tts import synthesize_tts_tracks
+from app.media.semantic_audio import compare_audio
+from app.media.procedural import synthesize_effect
 from app.storage.supabase import SupabaseREST, SupabaseError
 
 logger = logging.getLogger("galingtosh.worker")
@@ -146,8 +148,53 @@ class TaskManager:
             media_warnings.extend(tts_warnings)
             if tts_warnings:
                 raise RenderError(" ".join(tts_warnings))
+            # A searched sound effect must match its requested content before it is mixed.
+            audio_tracks = (film.get("audio") or {}).get("tracks", [])
+            for track in audio_tracks:
+                if not isinstance(track, dict) or track.get("kind") != "sfx": continue
+                expected = str(track.get("expectedContent") or "").strip()
+                refs = track.get("candidateMediaRefs") or ([track.get("mediaRef")] if track.get("mediaRef") else [])
+                accepted = None
+                attempts = []
+                verifier_available = True
+                for ref in refs[:3]:
+                    candidate = media_files.get(str(ref))
+                    if not expected or not candidate or not candidate.is_file():
+                        attempts.append({"status":"rejected", "reason":"Média candidat ou description indisponible."}); continue
+                    try:
+                        result = await asyncio.to_thread(compare_audio, candidate, expected)
+                    except Exception as exc:
+                        verifier_available = False
+                        attempts.append({"status":"unavailable", "reason":str(exc)[:180]})
+                        break
+                    attempts.append(result)
+                    if result.get("status") == "confirmed": accepted = str(ref); break
+                if accepted:
+                    track["mediaRef"] = accepted
+                    media_warnings.append(f"Effet sonore « {expected} » confirmé automatiquement après {len(attempts)} essai(s).")
+                else:
+                    fallback = workdir / f"generated_sfx_{track.get('id','sound')}.wav"
+                    duration = max((float(e.get("durationSec",2)) for e in track.get("events",[]) if isinstance(e,dict)),default=2.0)
+                    generated = await asyncio.to_thread(synthesize_effect, expected, fallback, min(12,max(.25,duration))) if expected and verifier_available else False
+                    verified = False
+                    if generated:
+                        try:
+                            result = await asyncio.to_thread(compare_audio, fallback, expected)
+                            attempts.append({**result,"source":"procedural"})
+                            verified = result.get("status") == "confirmed"
+                        except Exception as exc:
+                            verifier_available = False
+                            attempts.append({"status":"unavailable", "source":"procedural", "reason":str(exc)[:180]})
+                    if verified:
+                        media_files[f"__sfx_{track.get('id')}"] = fallback
+                        track["mediaRef"] = f"__sfx_{track.get('id')}"
+                        media_warnings.append(f"Aucun son recherché ne convenait; effet procédural « {expected} » généré puis confirmé par CLAP.")
+                    else:
+                        track["disabled"] = True
+                        why = "CLAP local indisponible; aucun candidat ne peut être confirmé" if not verifier_available else "aucun des trois candidats (ou effet procédural) n’a dépassé le seuil"
+                        media_warnings.append(f"Effet « {expected or 'non décrit'} » omis : {why}.")
             referenced = {shot.get("mediaRef") for scene in film.get("scenes", []) for shot in scene.get("shots", []) if shot.get("mediaRef")}
-            referenced.update(track.get("mediaRef") for track in (film.get("audio") or {}).get("tracks", []) if track.get("mediaRef"))
+            referenced.update(track.get("mediaRef") for track in audio_tracks if track.get("mediaRef") and not track.get("disabled"))
             if referenced - media_files.keys():
                 raise RenderError("Médias indisponibles : " + ", ".join(sorted(referenced - media_files.keys())))
             if await self._is_canceled(job_id):

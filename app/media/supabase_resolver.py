@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Any
 from app.media.resolver import download_public_media
-from app.media.graphics import chart_to_png, sanitize_svg_to_png
+from app.media.graphics import chart_to_png, chart_to_video, sanitize_svg_to_png
 from app.storage.supabase import SupabaseREST, SupabaseError
 
 MAX_MEDIA_BYTES = 200 * 1024 * 1024
@@ -44,7 +44,15 @@ async def resolve_film_media(film:dict[str,Any],project_id:str,user_id:str,db:Su
     spec=row.get("storage_path")
     if isinstance(spec,str): spec=json.loads(spec)
     if not isinstance(spec,dict): raise SupabaseError("Spécification de graphique invalide.")
-    final=target.with_suffix(".png"); chart_to_png(spec,final); files[mid]=final; continue
+    animate=bool(spec.get("animated"))
+    if animate:
+     uses=[float(shot.get("outSec",0))-float(shot.get("inSec",0)) for scene in film.get("scenes",[]) for shot in scene.get("shots",[]) if str(shot.get("mediaRef"))==mid]
+     duration=max(uses,default=0)
+     if duration<=0: raise SupabaseError("Graphique animé sans plan associé ou durée exploitable.")
+     final=target.with_suffix(".mp4"); chart_to_video(spec,final,duration,int((film.get("format") or {}).get("fps",24)))
+    else:
+     final=target.with_suffix(".png"); chart_to_png(spec,final)
+    files[mid]=final; continue
    if source=="upload":
     _,mime=await db.download_user_upload(str(row.get("storage_path") or ""),user_id,target,MAX_MEDIA_BYTES)
    elif source=="search":

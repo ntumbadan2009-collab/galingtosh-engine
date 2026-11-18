@@ -4,12 +4,16 @@ from app.media.graphics import GraphicsError, chart_to_png, sanitize_svg_to_png
 
 def test_bar_chart_is_rendered(tmp_path: Path):
     output=tmp_path/"chart.png"
-    chart_to_png({"type":"bar","title":"Test","labels":["A","B"],"series":[{"name":"S","values":[2,5]}]},output)
+    chart_to_png({"type":"bar","title":"Test","labels":["A","B"],"series":[{"name":"S","values":[2,5]}],"source":{"name":"Test source","url":"https://example.org/data"}},output)
     assert output.is_file() and output.stat().st_size>1000
 
 def test_invalid_pie_chart_rejected(tmp_path: Path):
     with pytest.raises(GraphicsError):
         chart_to_png({"type":"pie","labels":["A"],"series":[{"values":[-1]}]},tmp_path/"bad.png")
+
+def test_chart_without_source_is_rejected(tmp_path: Path):
+    with pytest.raises(GraphicsError, match="source documentée"):
+        chart_to_png({"type":"bar","labels":["A"],"series":[{"values":[2]}]},tmp_path/"bad.png")
 
 def test_svg_rasterization(tmp_path: Path):
     source=tmp_path/"safe.svg"; output=tmp_path/"safe.png"

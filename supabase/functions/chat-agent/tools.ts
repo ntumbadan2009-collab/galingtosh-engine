@@ -53,10 +53,16 @@ export const TOOLS: ToolDef[] = [
   tool("add_effect", "Ajoute un effet pris en charge : fade_in, fade_out, grayscale, vignette, text_overlay. params : text, position (top/center/bottom), fontSize, durationSec. target : film, id de scène ou de plan.",
     { type: S(), target: S("id de scène/plan/piste ou 'film'"), params: { type: "object" } }, ["type", "target"]),
   tool("remove_effect", "Supprime un effet.", { effect_id: S() }, ["effect_id"]),
-  tool("add_audio_track", "Ajoute une piste audio : fichier (mediaRef) ou voix off (tts provider edge-tts, voix Neural, texte maximum 4000 caractères).",
-    { kind: E(AUDIO_KINDS), mediaRef: S(), tts: { type: "object", properties: { text: S(), provider: S(), voice: S(), language: S() }, required: ["text"] },
+  tool("add_audio_track", "Ajoute une piste audio : fichier ou voix off. Pour un effet sfx, fournis expectedContent et jusqu’à 3 candidats audio issus de search_media; le moteur les écoute avec CLAP local, rejette les échecs et essaie un effet procédural pris en charge en dernier recours.",
+    { kind: E(AUDIO_KINDS), mediaRef: S(), expectedContent: S(), candidateMediaRefs: { type: "array", maxItems: 3, items: S() }, tts: { type: "object", properties: { text: S(), provider: S(), voice: S(), language: S() }, required: ["text"] },
       events: { type: "array", items: { type: "object", properties: { startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } }, volumeDb: N() }, ["kind"]),
   tool("remove_audio_track", "Supprime une piste audio.", { track_id: S() }, ["track_id"]),
+  tool("update_audio_track", "Corrige localement volume ou placement d'une piste existante, sans modifier les autres pistes.",
+    { track_id: S(), volumeDb: N(), events: { type: "array", items: { type: "object", properties: { id: S(), startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } } }, ["track_id"]),
+  tool("set_procedural_music", "Active ou désactive l'instrumental procédural du film, ou règle son volume global. Désactive pour garder voix et effets sans musique.",
+    { enabled: { type: "boolean" }, volumeDb: N() }),
+  tool("set_scene_music", "Règle uniquement l'ambiance instrumentale d'une scène. silence la coupe; aucune autre scène n'est modifiée.",
+    { scene_id: S(), mood: E(["silence", "calm", "hopeful", "tense", "sad", "wonder", "neutral"]), intensity: N("0 à 1") }, ["scene_id", "mood"]),
   tool("update_subtitles", "Remplace les sous-titres d'une langue (ou d'une piste).",
     { language: S(), track_id: S(), cues: { type: "array", items: { type: "object", properties: { startSec: N(), endSec: N(), text: S() }, required: ["startSec", "endSec", "text"] } } }, ["language", "cues"]),
   tool("search_media", "Cherche des médias existants (Wikimedia Commons, Openverse, Pexels, Pixabay, Freesound, Poly Haven). Retourne licence, auteur et restrictions : ne jamais les présenter comme « libres de droits » sans les citer.",
@@ -75,7 +81,7 @@ export const TOOLS: ToolDef[] = [
 const FILM_OPS = new Set([
   "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
   "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "update_shot", "remove_shot",
-  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_subtitles",
+  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_procedural_music", "set_scene_music", "update_subtitles",
 ]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

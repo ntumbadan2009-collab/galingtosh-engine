@@ -13,6 +13,7 @@ from app.media.images import normalize_image
 from app.media.video import normalize_video
 from app.media.transitions import assemble_segments
 from app.media.audio import mix_audio
+from app.media.procedural import compose_bed
 from app.media.subtitles import write_srt
 from app.media.effects import build_video_filters, finish_video
 
@@ -135,7 +136,9 @@ class FilmRenderer:
                         await self._black(segment, width, height, fps, duration)
                     else:
                         kind = (media or {}).get("kind")
-                        if kind in {"image", "svg", "chart"} or source.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+                        if source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
+                            await normalize_video(source, segment, width, height, fps, 0, duration, ((shot.get("camera") or {}).get("type") or "none"))
+                        elif kind in {"image", "svg", "chart"} or source.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
                             camera = ((shot.get("camera") or {}).get("type") or "none")
                             await normalize_image(source, segment, width, height, fps, duration, camera)
                         elif kind == "video" or source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
@@ -183,7 +186,13 @@ class FilmRenderer:
             _memory("after_effects_subtitles")
             if progress_callback: await progress_callback(86, "effets et sous-titres terminés")
             audio = film.get("audio") or {}
-            has_audio, audio_warnings = await mix_audio(styled, audio.get("tracks") or [], media_files, output,
+            tracks = list(audio.get("tracks") or [])
+            music = audio.get("proceduralMusic") or {}
+            if music.get("enabled") and compose_bed(scenes, music.get("cues") or [], work / "procedural.wav"):
+                media_files = {**media_files, "__procedural_music": work / "procedural.wav"}
+                tracks.append({"id":"__procedural_music", "kind":"music", "mediaRef":"__procedural_music",
+                               "volumeDb":music.get("volumeDb", -15)})
+            has_audio, audio_warnings = await mix_audio(styled, tracks, media_files, output,
                 total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128))
             warnings.extend(audio_warnings)
             _memory("after_audio_mix")

@@ -96,11 +96,37 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
     if not isinstance(tracks,list): errors.append("audio.tracks doit être un tableau."); tracks=[]
     for ti,track in enumerate(tracks):
         if not isinstance(track,dict): errors.append(f"Piste audio {ti+1} invalide."); continue
+        if track.get("kind")=="sfx":
+            refs=track.get("candidateMediaRefs",[])
+            if not isinstance(refs,list) or not 1<=len(refs)<=3 or any(not isinstance(r,str) for r in refs):
+                errors.append(f"Effet audio {ti+1} : fournir de 1 à 3 médias candidats.")
+            if not isinstance(track.get("expectedContent"),str) or not track["expectedContent"].strip():
+                errors.append(f"Effet audio {ti+1} : expectedContent doit décrire le son attendu.")
+            if not track.get("events"):
+                errors.append(f"Effet audio {ti+1} : un placement temporel (events) est requis.")
         events=track.get("events",[]) or []
         if not isinstance(events,list): errors.append(f"Événements audio de la piste {ti+1} invalides."); continue
         for ei,event in enumerate(events):
             if not isinstance(event,dict) or not _finite_number(event.get("startSec",0)) or not _finite_number(event.get("durationSec",0)) or event.get("startSec",0)<0 or event.get("durationSec",0)<=0:
                 errors.append(f"Événement audio {ti+1}.{ei+1} invalide.")
+    music=audio.get("proceduralMusic") or {}
+    if not isinstance(music,dict): errors.append("audio.proceduralMusic doit être un objet."); music={}
+    if "enabled" in music and not isinstance(music["enabled"],bool):
+        errors.append("audio.proceduralMusic.enabled doit être booléen.")
+    if "volumeDb" in music and (not _finite_number(music["volumeDb"]) or not -60<=music["volumeDb"]<=0):
+        errors.append("audio.proceduralMusic.volumeDb doit être entre -60 et 0.")
+    cues=music.get("cues",[])
+    if not isinstance(cues,list): errors.append("audio.proceduralMusic.cues doit être une liste."); cues=[]
+    scene_ids={str(s.get("id")) for s in scenes if isinstance(s,dict)}
+    seen=set()
+    for i,cue in enumerate(cues):
+        if not isinstance(cue,dict) or str(cue.get("sceneId")) not in scene_ids or str(cue.get("sceneId")) in seen:
+            errors.append(f"Ambiance musicale {i+1} : scène absente ou dupliquée."); continue
+        seen.add(str(cue["sceneId"]))
+        if cue.get("mood") not in {"silence","calm","hopeful","tense","sad","wonder","neutral"}:
+            errors.append(f"Ambiance musicale {i+1} : humeur inconnue.")
+        if not _finite_number(cue.get("intensity")) or not 0<=cue["intensity"]<=1:
+            errors.append(f"Ambiance musicale {i+1} : intensité attendue entre 0 et 1.")
     subtitles=film.get("subtitles",[]) or []
     if not isinstance(subtitles,list): errors.append("subtitles doit être un tableau."); subtitles=[]
     for si,track in enumerate(subtitles):
