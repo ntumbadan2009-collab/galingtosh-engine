@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from pathlib import Path
@@ -9,10 +10,11 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.media.tts import synthesize_text
+from app.media.tts import release_piper_voice, synthesize_text_with_provider
 
 router = APIRouter(prefix="/narration", tags=["narration"])
 _rate: dict[str, list[float]] = {}
+logger = logging.getLogger("galingtosh.narration_api")
 
 
 @router.post("/measure")
@@ -43,16 +45,22 @@ async def measure(payload: dict[str, Any], request: Request):
 
     _rate[user_id] = recent + [now]
     results = []
-    with TemporaryDirectory(prefix="gt-tts-measure-") as temp:
-        root = Path(temp)
-        for index, segment in enumerate(segments):
-            try:
-                seconds = await synthesize_text(segment["text"], str(segment.get("language") or "fr"),
-                    segment.get("voice"), root / f"scene-{index}.mp3")
-            except Exception:
-                raise HTTPException(status_code=503, detail=f"La durée TTS de la scène {index + 1} n'a pas pu être mesurée.") from None
-            target = segment.get("targetDurationSec")
-            results.append({"sceneId": str(segment["sceneId"]), "durationSec": round(seconds, 3),
-                "targetDurationSec": float(target) if target is not None else None,
-                "deltaSec": round(seconds - float(target), 3) if target is not None else None})
+    try:
+        with TemporaryDirectory(prefix="gt-tts-measure-") as temp:
+            root = Path(temp)
+            for index, segment in enumerate(segments):
+                try:
+                    seconds, provider = await synthesize_text_with_provider(segment["text"],
+                        str(segment.get("language") or "fr"), segment.get("voice"),
+                        root / f"scene-{index}.mp3", str(segment.get("ttsProvider") or "edge-tts"))
+                except Exception as exc:
+                    logger.warning("Mesure TTS scène %d échouée : %s.", index + 1, str(exc)[:240])
+                    raise HTTPException(status_code=503, detail=f"La durée TTS de la scène {index + 1} n'a pas pu être mesurée.") from None
+                target = segment.get("targetDurationSec")
+                results.append({"sceneId": str(segment["sceneId"]), "durationSec": round(seconds, 3),
+                    "targetDurationSec": float(target) if target is not None else None,
+                    "ttsProvider": provider,
+                    "deltaSec": round(seconds - float(target), 3) if target is not None else None})
+    finally:
+        release_piper_voice()
     return {"segments": results}

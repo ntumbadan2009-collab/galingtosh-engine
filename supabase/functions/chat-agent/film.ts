@@ -237,6 +237,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         }
         scene.durationSec = measured;
         scene.narration.measuredDurationSec = measured;
+        if (item.ttsProvider === "edge-tts" || item.ttsProvider === "piper") scene.narration.ttsProvider = item.ttsProvider;
         aligned++;
       }
       let newOffset = 0;

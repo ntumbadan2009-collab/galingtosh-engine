@@ -40,6 +40,7 @@ async def capabilities():
         "audio":{"supported":True,"formats":["mp3","m4a","wav","ogg","aac","flac"],"mixing":True},
         "subtitles":{"supported":True,"mode":"burned_in","formats":["srt"]},
         "effects":["fade_in","fade_out","grayscale","vignette","text_overlay"],
-        "graphics":{"charts":True,"svg":True,"3d":False},"tts":{"providers":["edge-tts"],"status":"available"},
+        "graphics":{"charts":True,"svg":True,"3d":False},
+        "tts":{"primary":"edge-tts","fallback":"piper-local-fr","status":"network_primary_with_local_fallback"},
         "limits":{"max_render_seconds":settings.max_render_seconds,"max_output_mb":settings.max_output_mb,
             "resolutions":["720p","1080p"],"max_pixels":2073600,"concurrent_renders":1}}

@@ -1,7 +1,9 @@
 import pytest
+import sys
+import types
 
 from app.core.narration import align_scene_narrations
-from app.media.tts import synthesize_scene_narrations
+from app.media.tts import synthesize_scene_narrations, synthesize_text_with_provider
 
 
 def test_scene_narrations_are_independent_and_use_measured_offsets():
@@ -28,11 +30,11 @@ def test_scene_narrations_are_independent_and_use_measured_offsets():
 
 @pytest.mark.asyncio
 async def test_scene_tts_synthesizes_one_file_per_scene(tmp_path, monkeypatch):
-    async def fake_synthesize(text, language, voice, destination):
+    async def fake_synthesize(text, language, voice, destination, preferred_provider="edge-tts"):
         destination.write_bytes(b"audio")
-        return 3.25 if text == "Texte un" else 6.5
+        return (3.25 if text == "Texte un" else 6.5), "piper"
 
-    monkeypatch.setattr("app.media.tts.synthesize_text", fake_synthesize)
+    monkeypatch.setattr("app.media.tts.synthesize_text_with_provider", fake_synthesize)
     film = {"info": {"language": "fr"}, "scenes": [
         {"id": "one", "order": 1, "narration": {"text": "Texte un"}},
         {"id": "two", "order": 2, "narration": {"text": "Texte deux"}},
@@ -42,3 +44,26 @@ async def test_scene_tts_synthesizes_one_file_per_scene(tmp_path, monkeypatch):
     assert set(files) == {"__scene_narration_one", "__scene_narration_two"}
     assert durations == {"one": 3.25, "two": 6.5}
     assert all(path.is_file() for path in files.values())
+
+
+@pytest.mark.asyncio
+async def test_local_piper_fallback_measures_the_audio(tmp_path, monkeypatch):
+    class FailedEdge:
+        def __init__(self, *_args):
+            raise ConnectionError("TTS online unavailable")
+
+    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=FailedEdge))
+    def fake_piper(text, destination):
+        destination.write_bytes(b"local-wav")
+
+    async def fake_probe(_path):
+        return {"format": {"duration": "4.75"}}
+
+    monkeypatch.setattr("app.media.tts._synthesize_piper", fake_piper)
+    monkeypatch.setattr("app.media.tts.probe_media", fake_probe)
+    duration, provider = await synthesize_text_with_provider(
+        "Une lionne avance dans les hautes herbes.", "fr-CD", "default", tmp_path / "voice.wav"
+    )
+    assert duration == 4.75
+    assert provider == "piper"
+    assert (tmp_path / "voice.wav").read_bytes() == b"local-wav"

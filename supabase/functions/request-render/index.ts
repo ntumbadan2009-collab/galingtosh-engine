@@ -79,6 +79,7 @@ Deno.serve(async (req) => {
         }
         scene.durationSec = actualDuration;
         scene.narration.measuredDurationSec = actualDuration;
+        if (measuredSegment.ttsProvider === "edge-tts" || measuredSegment.ttsProvider === "piper") scene.narration.ttsProvider = measuredSegment.ttsProvider;
       }
       const aligned = await admin.rpc("save_film_operation", {
         p_user_id: userId, p_film_id: film.id, p_rev: film.rev, p_data: alignedFilm,

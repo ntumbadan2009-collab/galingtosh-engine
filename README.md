@@ -15,7 +15,7 @@ Moteur de montage audiovisuel déterministe de Galingtosh 2. Le moteur reçoit u
 ## Non pris en charge
 - Modèles 3D et rendu 3D.
 - Génération de médias par IA.
-- TTS : synthèse vocale facultative Edge TTS sans clé API, avec voix par défaut selon la langue. Elle nécessite une connexion Internet et dépend du service distant ; une voix demandée mais indisponible fait échouer explicitement le rendu pour éviter une vidéo silencieuse présentée comme complète.
+- TTS : Edge TTS est essayé en premier ; si le service en ligne échoue, le moteur utilise le modèle Piper français embarqué (`fr_FR-siwis-medium`) et mesure l'audio réellement produit. La voix Piper utilise les données SIWIS (CC BY 4.0) : https://datashare.is.ed.ac.uk/handle/10283/2353. Pour les autres langues, Edge TTS reste nécessaire tant qu'un modèle local correspondant n'est pas installé.
 - Rendu 4K sur Render Free : le moteur refuse les sorties dépassant 2,07 mégapixels (profil mémoire 1080p) ; les ressources CPU/RAM, la durée et la taille peuvent aussi imposer un échec. 720p est le profil recommandé.
 - Effets ou transitions non répertoriés : avertissement et comportement de repli.
 
