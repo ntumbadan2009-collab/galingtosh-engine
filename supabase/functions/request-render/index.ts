@@ -39,11 +39,53 @@ Deno.serve(async (req) => {
     const { data: project } = await admin.from("projects").select("id").eq("id", projectId).eq("user_id", userId).maybeSingle();
     if (!project) return json({ error: "Projet introuvable" }, 404);
 
-    const { data: film } = await admin.from("films").select("data, version").eq("project_id", projectId)
+    const { data: film } = await admin.from("films").select("id, rev, data, version").eq("project_id", projectId)
       .order("version", { ascending: false }).limit(1).maybeSingle();
     if (!film) return json({ error: "Film introuvable" }, 404);
     const hasShots = (film.data?.scenes ?? []).some((s: any) => (s.shots ?? []).length > 0);
     if (!hasShots) return json({ error: "Le film ne contient aucun plan : rien à rendre." }, 422);
+
+    const segments = (film.data?.scenes ?? []).flatMap((scene: any) => {
+      const narration = scene.narration;
+      if (!narration || typeof narration.text !== "string" || !narration.text.trim()) return [];
+      return [{ sceneId: String(scene.id), text: narration.text, voice: narration.voice ?? "default",
+        language: narration.language ?? film.data?.info?.language ?? "fr",
+        targetDurationSec: narration.targetDurationSec ?? scene.durationSec }];
+    });
+    if (segments.length) {
+      const measured = await fetch(`${ENGINE_ROOT.replace(/\/$/, "")}/narration/measure`, {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ segments }), signal: AbortSignal.timeout(105_000),
+      });
+      if (!measured.ok) return json({ error: "La durée de la narration n'a pas pu être vérifiée avant le rendu." }, 503);
+      const measurement = await measured.json();
+      const mismatches = (measurement.segments ?? []).filter((x: any) => {
+        const actual = Number(x.durationSec), target = Number(x.targetDurationSec);
+        return Number.isFinite(actual) && Number.isFinite(target) && Math.abs(actual - target) > Math.max(1, target * 0.1);
+      });
+      if (mismatches.length) return json({ code: "narration_needs_revision",
+        error: "La narration doit être révisée par L’IA avant le rendu.", segments: mismatches }, 409);
+      const alignedFilm = structuredClone(film.data);
+      for (const measuredSegment of measurement.segments ?? []) {
+        const scene = (alignedFilm.scenes ?? []).find((candidate: any) => String(candidate.id) === String(measuredSegment.sceneId));
+        if (!scene?.narration) continue;
+        const oldDuration = Number(scene.durationSec) || Number(measuredSegment.durationSec);
+        const actualDuration = Number(measuredSegment.durationSec);
+        if (!Number.isFinite(actualDuration) || actualDuration < 0.5 || actualDuration > 3600) continue;
+        const ratio = actualDuration / oldDuration;
+        for (const shot of scene.shots ?? []) {
+          shot.inSec = Math.max(0, Number(shot.inSec ?? 0) * ratio);
+          shot.outSec = Math.max(shot.inSec + 0.05, Number(shot.outSec ?? oldDuration) * ratio);
+        }
+        scene.durationSec = actualDuration;
+        scene.narration.measuredDurationSec = actualDuration;
+      }
+      const aligned = await admin.rpc("save_film_operation", {
+        p_user_id: userId, p_film_id: film.id, p_rev: film.rev, p_data: alignedFilm,
+        p_op: { name: "align_narration_durations", args: { segments: measurement.segments ?? [] } },
+      });
+      if (aligned.error || !aligned.data) return json({ code: "film_changed", error: "Le film a changé pendant la mesure TTS. Relance la vérification avant le rendu." }, 409);
+    }
 
     const { data: jobId, error } = await admin.rpc("queue_render", { p_user_id: userId, p_project_id: projectId });
     if (error) return json({ error: error.message }, 422);

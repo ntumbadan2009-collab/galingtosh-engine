@@ -7,6 +7,7 @@ import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from ".
 export interface Ctx {
   admin: any;
   userId: string;
+  authToken: string;
   conversationId: string;
   projectId: string | null;
   cfg: LlmCfg;
@@ -41,6 +42,9 @@ export const TOOLS: ToolDef[] = [
     ["title", "narrativeGoal", "durationSec"]),
   tool("update_scene", "Modifie une scène existante (champs partiels).",
     { scene_id: S(), title: S(), narrativeGoal: S(), durationSec: N(), mood: S(), characters: { type: "array", items: S() } }, ["scene_id"]),
+  tool("set_scene_narration", "Écrit ou révise la narration d'une scène précise. Le texte est synthétisé séparément et commence au début de cette scène; il ne déborde pas dans la suivante. targetDurationSec indique la durée visée par l'IA après mesure TTS.",
+    { scene_id: S(), text: S("narration factuelle de cette scène, maximum 4000 caractères"), targetDurationSec: N("durée visée en secondes; par défaut la durée actuelle de la scène"), language: S(), voice: S() }, ["scene_id", "text"]),
+  tool("measure_narration", "Synthétise provisoirement chaque narration de scène et renvoie sa durée TTS réelle sans modifier le film. Obligatoire avant le rendu; révise les textes dont la durée s'écarte de la cible, puis remesure.", {}),
   tool("remove_scene", "Supprime une scène et ses plans.", { scene_id: S() }, ["scene_id"]),
   tool("reorder_scenes", "Réordonne les scènes : fournir TOUS les ids dans le nouvel ordre.", { scene_ids: { type: "array", items: S() } }, ["scene_ids"]),
   tool("add_shot", "Ajoute un plan à une scène. inSec/outSec = bornes du plan dans la scène.",
@@ -81,7 +85,7 @@ export const TOOLS: ToolDef[] = [
 const FILM_OPS = new Set([
   "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
   "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "update_shot", "remove_shot",
-  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_procedural_music", "set_scene_music", "update_subtitles",
+  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_scene_music", "update_subtitles",
 ]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -125,6 +129,35 @@ async function createProject(ctx: Ctx, a: Json) {
   await ctx.admin.from("conversations").update({ project_id: p.id }).eq("id", ctx.conversationId);
   ctx.projectId = p.id;
   return { ok: true, project_id: p.id, film_version: 1 };
+}
+
+async function measureNarrations(ctx: Ctx, film: Json) {
+  const segments = (film.scenes ?? []).flatMap((scene: Json) => {
+    const narration = scene.narration;
+    if (!narration || typeof narration.text !== "string" || !narration.text.trim()) return [];
+    return [{ sceneId: String(scene.id), text: narration.text, voice: narration.voice ?? "default",
+      language: narration.language ?? film.info?.language ?? "fr",
+      targetDurationSec: narration.targetDurationSec ?? scene.durationSec }];
+  });
+  if (!segments.length) return [];
+  const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\/$/, "");
+  const response = await fetch(`${engine}/narration/measure`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.authToken}` },
+    body: JSON.stringify({ segments }), signal: AbortSignal.timeout(105_000),
+  });
+  if (!response.ok) {
+    const message = await response.text().catch(() => "");
+    throw new Error(`Mesure de la narration impossible (${response.status}). ${message.slice(0, 300)}`);
+  }
+  const result = await response.json();
+  return Array.isArray(result.segments) ? result.segments : [];
+}
+
+function narrationMismatches(measured: Json[]) {
+  return measured.filter((item: Json) => {
+    const actual = Number(item.durationSec), target = Number(item.targetDurationSec);
+    return Number.isFinite(actual) && Number.isFinite(target) && Math.abs(actual - target) > Math.max(1, target * 0.1);
+  });
 }
 
 function mediaRefFromRow(r: Json): Json {
@@ -185,6 +218,10 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
       case "get_film": {
         const row = await loadWorking(ctx);
         return { output: { version: row.version, rev: row.rev, film: row.data } };
+      }
+      case "measure_narration": {
+        const row = await loadWorking(ctx);
+        return { output: { segments: await measureNarrations(ctx, row.data), tolerance: "écart maximal de 1 seconde ou 10 % de la durée cible" } };
       }
       case "list_media": {
         const { data, error } = await ctx.admin.from("media_assets")
@@ -269,6 +306,13 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const row = await loadWorking(ctx);
         const hasShots = (row.data.scenes ?? []).some((s: Json) => (s.shots ?? []).length > 0);
         if (!hasShots) throw new Error("Le film ne contient aucun plan : rien à rendre.");
+        const measured = await measureNarrations(ctx, row.data);
+        const mismatches = narrationMismatches(measured);
+        if (mismatches.length) {
+          const details = mismatches.map((x: Json) => `scène ${x.sceneId}: ${x.durationSec}s mesurées pour ${x.targetDurationSec}s visées`).join("; ");
+          throw new Error(`Le rendu attend une narration ajustée : ${details}. Réécris uniquement les segments concernés avec set_scene_narration, préserve les faits, puis mesure à nouveau. Si le contenu disponible ne permet pas d'allonger la voix sans inventer, ajuste la durée cible de cette scène selon son contenu.`);
+        }
+        if (measured.length) await mutateFilm(ctx, "align_narration_durations", { segments: measured });
         const { data: jobId, error } = await ctx.admin.rpc("queue_render", { p_user_id: ctx.userId, p_project_id: ctx.projectId });
         if (error) throw new Error(error.message);
         return {

@@ -43,6 +43,12 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
         duration=scene.get("durationSec",0)
         if not _finite_number(duration) or duration<=0:
             errors.append(f"scenes[{si}].durationSec doit être positif et fini.")
+        narration=scene.get("narration")
+        if narration is not None:
+            if not isinstance(narration,dict) or not isinstance(narration.get("text"),str) or not narration.get("text","").strip() or len(narration.get("text",""))>4000:
+                errors.append(f"scenes[{si}].narration.text doit contenir de 1 à 4000 caractères.")
+            elif "targetDurationSec" in narration and (not _finite_number(narration["targetDurationSec"]) or not 0.5<=narration["targetDurationSec"]<=3600):
+                errors.append(f"scenes[{si}].narration.targetDurationSec doit être entre 0.5 et 3600 secondes.")
         shots=scene.get("shots",[])
         if not isinstance(shots,list):
             errors.append(f"scenes[{si}].shots doit être un tableau."); continue

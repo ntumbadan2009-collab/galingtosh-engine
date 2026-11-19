@@ -13,9 +13,10 @@ from typing import Any
 
 from app.config import Settings
 from app.core.renderer import FilmRenderer, RenderError, _rss_mb
+from app.core.narration import align_scene_narrations
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
-from app.media.tts import synthesize_tts_tracks
+from app.media.tts import synthesize_scene_narrations, synthesize_tts_tracks
 from app.media.procedural import synthesize_effect
 from app.storage.supabase import SupabaseREST, SupabaseError
 
@@ -147,6 +148,17 @@ class TaskManager:
             media_warnings.extend(tts_warnings)
             if tts_warnings:
                 raise RenderError(" ".join(tts_warnings))
+            scene_tts_files, scene_tts_durations, scene_tts_warnings = await synthesize_scene_narrations(film, workdir)
+            media_files.update(scene_tts_files)
+            media_warnings.extend(scene_tts_warnings)
+            if scene_tts_warnings:
+                raise RenderError(" ".join(scene_tts_warnings))
+            # A scene with its own narration takes its actual spoken length as
+            # its final duration. Scale visual shot boundaries with that scene;
+            # never time-stretch, clip, or let its narration spill into the next one.
+            narration_tracks, narration_alignment_warnings = align_scene_narrations(film, scene_tts_durations)
+            media_warnings.extend(narration_alignment_warnings)
+            (film.setdefault("audio", {})).setdefault("tracks", []).extend(narration_tracks)
             # SFX are synthesized locally in Python only. Never mix a downloaded
             # or imported sound effect into a render while procedural audio is active.
             audio_tracks = (film.get("audio") or {}).get("tracks", [])

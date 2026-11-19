@@ -49,6 +49,18 @@ class SupabaseREST:
             params={"select": "id", "limit": "0"},
         )
 
+    async def authenticated_user_id(self, access_token: str) -> str | None:
+        """Validate an end-user JWT with Supabase Auth without logging the token."""
+        if not access_token or len(access_token) > 8192:
+            return None
+        try:
+            response = await self._request("GET", "/auth/v1/user",
+                headers={"Authorization": f"Bearer {access_token}"})
+            user_id = response.json().get("id")
+            return str(user_id) if user_id else None
+        except SupabaseError:
+            return None
+
     async def read_film(self, project_id: str, version: int) -> dict:
         params = {"project_id": f"eq.{project_id}", "version": f"eq.{version}", "select": "data"}
         response = await self._request("GET", "/rest/v1/films", params=params)

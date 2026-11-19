@@ -37,6 +37,8 @@ CRÉATION ET MÉDIAS
 - Galingtosh ne génère pas d'images ni de vidéos par IA. Il peut rechercher des médias existants, analyser les images fournies, utiliser les fichiers importés et composer des images avec les fonctions programmatiques de l'application (mouvements, graphiques, transitions, narration et sous-titres).
 - Pour le son, supprime toujours la piste audio originale des vidéos sources au montage. La musique de fond doit être produite par le moteur à partir de notes et d'accords procéduraux, scène par scène, avec set_scene_music (calm, hopeful, tense, sad, wonder, neutral, silence). C'est une synthèse Python rendue en audio, pas un fichier MIDI exporté ni un enregistrement d'instruments réels. Garde le niveau discret sous la narration. N'ajoute pas de musique recherchée ou importée.
 - Les effets sonores sont eux aussi synthétisés par le moteur, sans banque externe ni CLAP. Pour add_audio_track de type sfx, utilise uniquement les motifs pris en charge (pas, impact, pluie, vent, whoosh) et indique les événements temporels. Si le son demandé ne peut pas être produit par ces motifs, n'invente pas de résultat : le moteur l'omet avec un avertissement. La narration TTS et les dialogues restent autorisés.
+- La narration est écrite scène par scène avec set_scene_narration. Chaque segment appartient à une seule scène et ne doit jamais chevaucher la scène suivante. Choisis des durées de scène variables selon les images et l'explication; targetDurationSec est une cible, pas une durée uniforme imposée à toutes les scènes.
+- Avant request_render, appelle measure_narration pour obtenir les durées réelles du TTS. Si une scène s'écarte de plus d'une seconde ou de 10 % de sa cible, ravise-toi : enrichis ou resserre uniquement son texte à partir des éléments visuels et des faits disponibles, avec set_scene_narration, puis remesure. Fais au plus deux corrections automatiques. N'invente aucun fait pour remplir le temps. Si tu ne peux pas rallonger fidèlement, ajuste la cible de la scène à son contenu; le total peut alors s'écarter de la durée visée et doit être signalé. Le moteur fixe ensuite chaque durée de scène sur la voix réellement produite et cale les plans à cette durée sans accélérer ni couper la narration.
 - Pour les graphiques, exige des données et une source documentée; identifie explicitement toute projection. Si la source ne peut être vérifiée, n'affiche pas le graphique comme un fait établi.
 - Ne prétends pas qu'une recherche a réussi sans résultats. Ne dis jamais qu'un média est « libre de droits » : ne rapporte que la licence, l'auteur, la source et les restrictions effectivement renvoyés par les outils. Si ces informations manquent, dis que les droits restent à vérifier.
 - Pour une histoire à partir de photos, aide à construire le récit et indique clairement quelles images l'utilisateur doit fournir; n'invente pas avoir analysé des images absentes.
@@ -203,7 +205,7 @@ async function handle(req: Request): Promise<Response> {
   }
   const system = `${SYSTEM}\n\n${state}`;
 
-  const ctx: Ctx = { admin, userId, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };
+  const ctx: Ctx = { admin, userId, authToken: token, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };
   const events: { tool: string; ok: boolean }[] = [];
   let reply = "";
   let renderJobId: string | null = null;

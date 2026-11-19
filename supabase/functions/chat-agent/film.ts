@@ -183,10 +183,84 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const s = findScene(f, req(a, "scene_id"));
       if (a.title !== undefined) s.title = str(a.title, "title", 200);
       if (a.narrativeGoal !== undefined) s.narrativeGoal = str(a.narrativeGoal, "narrativeGoal", 1000);
-      if (a.durationSec !== undefined) s.durationSec = numIn(a.durationSec, "durationSec", 0.5, 3600);
+      if (a.durationSec !== undefined) {
+        s.durationSec = numIn(a.durationSec, "durationSec", 0.5, 3600);
+        if (s.narration) s.narration.targetDurationSec = s.durationSec;
+      }
       if (a.mood !== undefined) s.mood = a.mood === null ? undefined : str(a.mood, "mood", 60);
       if (a.characters !== undefined) s.characters = charIds(f, a.characters);
       for (const sh of s.shots) if (sh.outSec > s.durationSec) warnings.push(`Le plan ${sh.id} dépasse la durée de la scène (${sh.outSec}s > ${s.durationSec}s).`);
+      break;
+    }
+    case "set_scene_narration": {
+      const scene = findScene(f, req(a, "scene_id"));
+      const text = str(a.text, "text", 4000).trim();
+      if (!text) fail("La narration de la scène ne peut pas être vide.");
+      const targetDurationSec = numIn(a.targetDurationSec ?? scene.durationSec, "targetDurationSec", 0.5, 3600);
+      const oldDuration = Number(scene.durationSec) || targetDurationSec;
+      if (Math.abs(targetDurationSec - oldDuration) > 0.001) {
+        const ratio = targetDurationSec / oldDuration;
+        for (const shot of scene.shots ?? []) {
+          shot.inSec = Math.max(0, Number(shot.inSec ?? 0) * ratio);
+          shot.outSec = Math.max(shot.inSec + 0.05, Number(shot.outSec ?? oldDuration) * ratio);
+        }
+        scene.durationSec = targetDurationSec;
+      }
+      scene.narration = {
+        text,
+        targetDurationSec,
+        language: str(a.language ?? f.info.language ?? "fr", "language", 10),
+        voice: str(a.voice ?? "default", "voice", 80),
+      };
+      result = { scene_id: scene.id, targetDurationSec };
+      break;
+    }
+    case "align_narration_durations": {
+      if (!Array.isArray(a.segments)) fail("segments doit être une liste.");
+      const oldSpans: Array<[number, number]> = [];
+      let oldOffset = 0;
+      for (const scene of f.scenes) {
+        const duration = Math.max(0, Number(scene.durationSec) || 0);
+        oldSpans.push([oldOffset, oldOffset + duration]);
+        oldOffset += duration;
+      }
+      let aligned = 0;
+      for (const item of a.segments) {
+        const scene = findScene(f, req(item.sceneId));
+        if (!scene.narration) fail(`Aucune narration enregistrée pour la scène ${item.sceneId}.`);
+        const measured = numIn(item.durationSec, "durationSec", 0.5, 3600);
+        const previous = Number(scene.durationSec) || measured;
+        const ratio = measured / previous;
+        for (const shot of scene.shots ?? []) {
+          shot.inSec = Math.max(0, Number(shot.inSec ?? 0) * ratio);
+          shot.outSec = Math.max(shot.inSec + 0.05, Number(shot.outSec ?? previous) * ratio);
+        }
+        scene.durationSec = measured;
+        scene.narration.measuredDurationSec = measured;
+        aligned++;
+      }
+      let newOffset = 0;
+      const newSpans = f.scenes.map((scene: Json) => {
+        const duration = Math.max(0, Number(scene.durationSec) || 0);
+        const span: [number, number] = [newOffset, newOffset + duration];
+        newOffset += duration;
+        return span;
+      });
+      const remapTime = (time: number) => {
+        for (let i = 0; i < oldSpans.length; i++) {
+          const [start, end] = oldSpans[i];
+          if (start <= time && time <= end && end > start) {
+            const [nextStart, nextEnd] = newSpans[i];
+            return nextStart + (time - start) * (nextEnd - nextStart) / (end - start);
+          }
+        }
+        return time > oldOffset ? time + newOffset - oldOffset : time;
+      };
+      for (const track of f.subtitles) for (const cue of track.cues ?? []) {
+        if (Number.isFinite(Number(cue.startSec))) cue.startSec = Math.max(0, remapTime(Number(cue.startSec)));
+        if (Number.isFinite(Number(cue.endSec))) cue.endSec = Math.max(0, remapTime(Number(cue.endSec)));
+      }
+      result = { aligned_scenes: aligned };
       break;
     }
     case "remove_scene": {
