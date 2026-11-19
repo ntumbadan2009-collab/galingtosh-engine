@@ -16,7 +16,7 @@ def require_binary(name: str) -> str:
     return binary
 
 
-async def run_ffmpeg(args: list[str], *, timeout: int = 600) -> None:
+async def run_ffmpeg(args: list[str], *, timeout: int = 1800) -> None:
     binary = require_binary("ffmpeg")
     proc = await asyncio.create_subprocess_exec(
         binary, "-hide_banner", "-loglevel", "error", "-y", "-filter_threads", "1", "-filter_complex_threads", "1", *args,
