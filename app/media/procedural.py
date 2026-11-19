@@ -50,7 +50,9 @@ def compose_bed(scenes: list[dict], cues: list[dict], output: Path) -> bool:
                     sample = sum(math.sin(2 * math.pi * f * (offset + t)) * 0.65 +
                                  math.sin(2 * math.pi * f * 2 * (offset + t)) * 0.12
                                  for f in frequencies) / max(1, len(frequencies))
-                    value = int(max(-1, min(1, sample * fade * movement * intensity * 0.24)) * 32767)
+                    # Give phone playback enough level to reveal the music bed;
+                    # final loudness normalization still leaves headroom for voice.
+                    value = int(max(-1, min(1, sample * fade * movement * intensity * 0.36)) * 32767)
                     struct.pack_into("<h", block, (i - begin) * 2, value)
                 wav.writeframesraw(block)
             offset += duration

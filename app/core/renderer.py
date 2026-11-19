@@ -111,7 +111,19 @@ class FilmRenderer:
                 _memory(f"scene_{scene_index+1}_start")
                 scene_duration = float(scene.get("durationSec", 0))
                 shots = sorted(scene.get("shots", []), key=lambda x: x.get("order", 0))
+                # Some agent plans express each shot's intended length in
+                # outSec while leaving every inSec at zero. Interpret those
+                # as consecutive durations; otherwise the second shot becomes
+                # a one-second sliver after overlap correction.
+                if len(shots) > 1 and all(abs(float(s.get("inSec", 0) or 0)) < 0.02 for s in shots):
+                    cursor_for_shots = 0.0
+                    for shot in shots:
+                        intended = max(0.05, float(shot.get("outSec", 0) or 0) - float(shot.get("inSec", 0) or 0))
+                        shot["inSec"] = round(cursor_for_shots, 3)
+                        shot["outSec"] = round(min(scene_duration, cursor_for_shots + intended), 3)
+                        cursor_for_shots = float(shot["outSec"])
                 cursor = 0.0
+                scene_segment_start = len(segments)
                 for shot_index, shot in enumerate(shots):
                     start = max(0.0, float(shot.get("inSec", 0)))
                     end = min(scene_duration, float(shot.get("outSec", 0)))
@@ -120,10 +132,23 @@ class FilmRenderer:
                         start = cursor
                     if end <= start: continue
                     if start > cursor + 0.02:
-                        warnings.append(f"Scène {scene_index+1} : intervalle vide rendu en noir.")
-                        black = work / f"segment_{len(segments):04d}.mp4"
-                        await self._black(black, width, height, fps, start-cursor)
-                        segments.append(black); segment_shot_ids.append(None); segment_durations.append(start-cursor)
+                        # Close timeline gaps by extending the preceding shot.
+                        # Intentional black is not inferred from missing timing.
+                        warnings.append(f"Scène {scene_index+1} : intervalle vide comblé par le dernier plan.")
+                        if len(segments) > scene_segment_start:
+                            previous = segments[-1]
+                            extended = work / f"segment_{len(segments):04d}_hold.mp4"
+                            gap = min(scene_duration - cursor, start - cursor)
+                            if gap > 0:
+                                await run_ffmpeg(["-i", str(previous), "-vf", f"tpad=stop_mode=clone:stop_duration={gap:.4f}",
+                                    "-t", f"{segment_durations[-1]+gap:.4f}", "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                                    "-threads", "1", "-pix_fmt", "yuv420p", str(extended)])
+                                previous.unlink(missing_ok=True)
+                                segments[-1] = extended
+                                segment_durations[-1] += gap
+                                cursor += gap
+                        else:
+                            start = cursor
                     duration = end - start
                     media_id = shot.get("mediaRef")
                     media = media_index.get(media_id) if media_id else None
@@ -154,10 +179,22 @@ class FilmRenderer:
                     if progress_callback:
                         await progress_callback(min(78, 18 + int(60 * completed_shots / total_shots)), f"plan {completed_shots}/{total_shots}")
                 if cursor < scene_duration:
-                    warnings.append(f"Scène {scene_index+1} : fin non couverte, fond noir ajouté.")
-                    black = work / f"segment_{len(segments):04d}.mp4"
-                    await self._black(black, width, height, fps, scene_duration-cursor)
-                    segments.append(black); segment_shot_ids.append(None); segment_durations.append(scene_duration-cursor)
+                    if len(segments) > scene_segment_start and segment_shot_ids[-1] is not None:
+                        warnings.append(f"Scène {scene_index+1} : fin non couverte, dernier plan prolongé.")
+                        previous = segments[-1]
+                        remaining = scene_duration - cursor
+                        extended = work / f"segment_{len(segments):04d}_hold.mp4"
+                        await run_ffmpeg(["-i", str(previous), "-vf", f"tpad=stop_mode=clone:stop_duration={remaining:.4f}",
+                            "-t", f"{segment_durations[-1]+remaining:.4f}", "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                            "-threads", "1", "-pix_fmt", "yuv420p", str(extended)])
+                        previous.unlink(missing_ok=True)
+                        segments[-1] = extended
+                        segment_durations[-1] += remaining
+                    else:
+                        warnings.append(f"Scène {scene_index+1} : aucun plan exploitable pour couvrir la fin.")
+                        black = work / f"segment_{len(segments):04d}.mp4"
+                        await self._black(black, width, height, fps, scene_duration-cursor)
+                        segments.append(black); segment_shot_ids.append(None); segment_durations.append(scene_duration-cursor)
                 gc.collect()
                 _memory(f"scene_{scene_index+1}_complete")
             if not segments: raise RenderError("Aucun plan exploitable dans le Film JSON.")
@@ -191,7 +228,11 @@ class FilmRenderer:
             if music.get("enabled") and compose_bed(scenes, music.get("cues") or [], work / "procedural.wav"):
                 media_files = {**media_files, "__procedural_music": work / "procedural.wav"}
                 tracks.append({"id":"__procedural_music", "kind":"music", "mediaRef":"__procedural_music",
-                               "volumeDb":music.get("volumeDb", -15)})
+                               # Earlier plans stored -15 dB, which made this
+                               # small procedural pad effectively inaudible on
+                               # phone speakers. Keep it below narration but
+                               # enforce a modest audible floor.
+                               "volumeDb":max(-8.0, min(0.0, float(music.get("volumeDb", -8))))})
             has_audio, audio_warnings = await mix_audio(styled, tracks, media_files, output,
                 total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128))
             warnings.extend(audio_warnings)
