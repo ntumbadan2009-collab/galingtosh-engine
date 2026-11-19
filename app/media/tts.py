@@ -21,7 +21,10 @@ DEFAULT_VOICES = {"fr":"fr-FR-DeniseNeural","en":"en-US-AriaNeural","es":"es-ES-
 def _voice(language: str, voice: str | None) -> str:
     lang = (language or "fr").split("-")[0].lower()
     selected = str(voice or "default")
-    if selected == "default" or re.fullmatch(r"[a-z]{2}-[A-Z]{2}-Standard-[A-Z]", selected):
+    # Film plans may store Google voice identifiers (for example
+    # fr-FR-Neural2-B). Edge TTS does not accept those names; map them to the
+    # supported language default instead of failing before Piper fallback.
+    if selected == "default" or re.fullmatch(r"[a-z]{2}-[A-Z]{2}-(?:Standard|Neural2)-[A-Z]", selected):
         selected = DEFAULT_VOICES.get(lang, DEFAULT_VOICES["fr"])
     if not re.fullmatch(r"[A-Za-z0-9-]{2,80}", selected):
         raise ValueError("Voix TTS invalide.")
