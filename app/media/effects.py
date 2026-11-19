@@ -56,6 +56,6 @@ async def finish_video(source:Path,destination:Path,filters:list[str],subtitle_f
     if not applied:
         source.replace(destination); return
     await run_ffmpeg(["-i",str(source),"-vf",",".join(applied),"-map","0:v:0","-map","0:a?",
-        "-c:v","libx264","-preset","veryfast","-threads","1","-pix_fmt","yuv420p",
+        "-c:v","libx264","-preset","ultrafast","-crf","25","-threads","1","-pix_fmt","yuv420p",
         "-c:a","aac","-b:a","128k","-movflags","+faststart",str(destination)])
 
