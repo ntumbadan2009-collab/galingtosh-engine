@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     worker_id: str = "galingtosh-engine"
     poll_interval_seconds: int = Field(default=8, ge=2, le=120)
     max_render_seconds: int = Field(default=600, ge=30)
-    max_output_mb: int = Field(default=45, ge=1, le=49)
+    max_output_mb: int = Field(default=49, ge=1, le=49)
     temp_dir: str = "/tmp/galingtosh"
 
 @lru_cache
