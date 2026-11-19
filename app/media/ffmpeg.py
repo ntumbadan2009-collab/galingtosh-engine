@@ -35,7 +35,11 @@ async def run_ffmpeg(args: list[str], *, timeout: int = 600) -> None:
         raise
     if proc.returncode != 0:
         detail = stderr.decode("utf-8", "replace").strip().splitlines()
-        raise FFmpegError("Échec FFmpeg : " + (detail[-1][:180] if detail else "erreur inconnue"))
+        # Keep a small diagnostic tail so a production render failure can be
+        # fixed from its job error/logs instead of reducing every FFmpeg fault
+        # to the generic final line.
+        diagnostic = " | ".join(line.strip() for line in detail[-6:])
+        raise FFmpegError("Échec FFmpeg : " + (diagnostic[:900] if diagnostic else "erreur inconnue"))
 
 
 async def probe_media(path: str) -> dict:
