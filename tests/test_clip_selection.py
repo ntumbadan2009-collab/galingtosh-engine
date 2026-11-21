@@ -114,3 +114,25 @@ async def test_rejects_video_source_range_past_end(tmp_path: Path):
     with pytest.raises(FFmpegError, match="hors de la vidéo"):
         await normalize_video(source, tmp_path / "out.mp4", 320, 180, 24,
                               0.8, 0.6)
+
+
+@pytest.mark.skipif(not FFMPEG_READY, reason="FFmpeg requis")
+@pytest.mark.asyncio
+async def test_extracts_real_jpeg_samples(tmp_path: Path):
+    import base64
+    from app.media.clip_selection import sample_candidate_frames
+
+    source = tmp_path / "source.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=green:s=320x180:r=24:d=2",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True)
+    candidates = [{"startSec": 0.0, "endSec": 1.0},
+                  {"startSec": 1.0, "endSec": 2.0}]
+    samples = await sample_candidate_frames(source, candidates, max_frames=2)
+    assert [sample["candidateIndex"] for sample in samples] == [0, 1]
+    for sample in samples:
+        jpeg = base64.b64decode(sample["jpegBase64"], validate=True)
+        assert jpeg.startswith(bytes([0xFF, 0xD8]))
+        assert len(jpeg) < 100_000
