@@ -94,8 +94,8 @@ const GEMINI_RESERVE = [
   "gemini-4-argon",
 ];
 const GEMINI_BASE = /generativelanguage\.googleapis\.com/;
-const ROTATION_BUDGET_MS = 85_000; // reste sous la limite de temps de la fonction
-const ATTEMPT_TIMEOUT_MS = 22_000; // un modèle qui ne répond pas en 22 s est abandonné pour passer au suivant
+const ROTATION_BUDGET_MS = 35_000; // reste sous la limite de temps de la fonction
+const ATTEMPT_TIMEOUT_MS = 13_000; // un modèle qui ne répond pas en 22 s est abandonné pour passer au suivant
 const cooldown = new Map<string, number>(); // modèle -> instant (ms) avant lequel on l'évite
 let cursor = 0; // prochain point de départ dans le groupe principal (persiste tant que l'instance est chaude)
 

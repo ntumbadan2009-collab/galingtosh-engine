@@ -7,7 +7,7 @@ import { summarizeFilm } from "./film.ts";
 const MAX_STEPS = 10;
 const HISTORY_LIMIT = 40;
 // Keep time to persist a clear response even when the model provider times out.
-const DEADLINE_MS = 85_000;
+const DEADLINE_MS = 43_000;
 const HOURLY_LIMIT = Number(Deno.env.get("AGENT_HOURLY_LIMIT") ?? 60);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -129,7 +129,7 @@ async function handle(req: Request): Promise<Response> {
   }
 
   // Model calls must stop before the function runtime is forced to terminate.
-  cfg.deadlineAt = started + 95_000;
+  cfg.deadlineAt = started + 52_000;
 
   // Limite horaire (contrôle des coûts)
   const since = new Date(Date.now() - 3600_000).toISOString();
