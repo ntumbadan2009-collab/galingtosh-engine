@@ -226,7 +226,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       }
       let aligned = 0;
       for (const item of a.segments) {
-        const scene = findScene(f, req(item.sceneId));
+        const scene = findScene(f, req(item, "sceneId"));
         if (!scene.narration) fail(`Aucune narration enregistrée pour la scène ${item.sceneId}.`);
         const measured = numIn(item.durationSec, "durationSec", 0.5, 3600);
         const previous = Number(scene.durationSec) || measured;
