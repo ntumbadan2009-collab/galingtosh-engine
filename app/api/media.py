@@ -11,6 +11,7 @@ from app.media.ffmpeg import probe_media, FFmpegError
 from app.storage.supabase import SupabaseREST
 
 router = APIRouter(prefix="/media", dependencies=[Depends(require_engine_secret)])
+user_router = APIRouter(prefix="/media")
 
 class ProbeRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=80)
@@ -74,7 +75,7 @@ class InspectClipsRequest(ProbeRequest):
     scene_threshold: float = Field(default=0.30, ge=0.1, le=0.8)
 
 
-@router.post("/inspect-clips")
+@user_router.post("/inspect-clips")
 async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[str, Any]:
     """Return actual shot boundaries, not fabricated semantic assessments.
 
@@ -87,8 +88,12 @@ async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[
     db = getattr(request.app.state, "supabase", None)
     if not isinstance(db, SupabaseREST):
         raise HTTPException(status_code=503, detail="Stockage média indisponible.")
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    authenticated_id = await db.authenticated_user_id(token)
+    if not authenticated_id or authenticated_id != payload.user_id:
+        raise HTTPException(status_code=401, detail="Session invalide.")
     rows = await db.read_media_assets(payload.project_id, [payload.media_id])
-    if not rows:
+    if not rows or str(rows[0].get("user_id")) != authenticated_id:
         raise HTTPException(status_code=404, detail="Média introuvable.")
     row = rows[0]
     if row.get("kind") != "video":
