@@ -5,7 +5,7 @@ import math
 CAMERA_TYPES = {"none", "ken_burns", "dolly", "pan", "tilt", "zoom_in", "zoom_out"}
 
 async def normalize_video(source: Path, destination: Path, width: int, height: int, fps: int,
-                         start: float, duration: float, camera: str = "none") -> None:
+                         start: float, duration: float, camera: str = "none") -> str | None:
     if not math.isfinite(start) or start < 0 or not math.isfinite(duration) or duration <= 0:
         raise FFmpegError("Plage temporelle de la vidéo source invalide.")
     probe = await probe_media(str(source))
@@ -17,12 +17,38 @@ async def normalize_video(source: Path, destination: Path, width: int, height: i
         source_duration = float(probe.get("format", {}).get("duration", 0))
     except (ValueError, TypeError):
         raise FFmpegError("Durée vidéo source inconnue.") from None
-    # Do not silently freeze the last frame to cover a wrong edit decision.
-    if not math.isfinite(source_duration) or source_duration <= 0 or start + duration > source_duration + 0.06:
-        raise FFmpegError(
-            f"Passage demandé [{start:.2f}s, {start + duration:.2f}s] "
-            f"hors de la vidéo source ({source_duration:.2f}s)."
+    if not math.isfinite(source_duration) or source_duration <= 0:
+        raise FFmpegError("La durée de la vidéo source est invalide.")
+    # An agent may request a shot longer than the real source. Recover without
+    # introducing a black gap or silently freezing the last image. Prefer
+    # controlled slow motion when feasible; repeat only for large shortages.
+    # Report any fallback to the renderer so the deliverable remains auditable.
+    adjustment = None
+    if start >= source_duration - 0.10:
+        adjustment = (
+            f"Début source {start:.2f}s indisponible (durée {source_duration:.2f}s) : "
+            "lecture reprise à 0s."
         )
+        start = 0.0
+    available = source_duration - start
+    if available < 0.25:
+        raise FFmpegError("La vidéo ne contient pas assez d'images exploitables.")
+    time_scale = 1.0
+    loop_source = False
+    if duration > available + 0.06:
+        stretch = duration / available
+        if stretch <= 1.6:
+            time_scale = stretch
+            adjustment = (
+                f"Vidéo source de {available:.2f}s adaptée au plan de {duration:.2f}s "
+                f"par ralentissement {1/stretch:.2f}x."
+            )
+        else:
+            loop_source = True
+            adjustment = (
+                f"Vidéo source de {available:.2f}s insuffisante pour {duration:.2f}s : "
+                "lecture répétée ; rechercher une séquence complémentaire pour améliorer le montage."
+            )
     camera = camera if camera in CAMERA_TYPES else "none"
     if camera == "none":
         vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1,fps={fps}"
@@ -42,9 +68,18 @@ async def normalize_video(source: Path, destination: Path, width: int, height: i
             x = "(iw-ow)/2"
             y = "(ih-oh)/2"
         vf = f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={width}:{height}:x='{x}':y='{y}',setsar=1,fps={fps}"
+    # Slow down timestamps before FPS conversion; avoid frame freezes used by
+    # the old tpad=duration fallback. A tiny tail pad covers codec rounding only.
+    if time_scale != 1.0:
+        vf = f"setpts={time_scale:.8f}*(PTS-STARTPTS)," + vf
+    inputs = (["-stream_loop", "-1"] if loop_source else []) + [
+        "-ss", str(start), "-i", str(source),
+    ]
     await run_ffmpeg([
-        "-ss", str(start), "-i", str(source), "-t", str(duration), "-vf", vf + f",tpad=stop_mode=clone:stop_duration={duration}",
+        *inputs, "-t", str(duration),
+        "-vf", vf + ",tpad=stop_mode=clone:stop_duration=0.12",
         "-an", "-r", str(fps), "-c:v", "libx264", "-preset", "veryfast",
         "-threads", "1", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(destination)
     ])
+    return adjustment
 
