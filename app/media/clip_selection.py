@@ -47,7 +47,7 @@ async def inspect_video_passages(
         raise ValueError("Durée de la vidéo invalide.")
     analyzed_seconds = min(total_seconds, MAX_INSPECTION_SECONDS)
     ffmpeg = require_binary("ffmpeg")
-    filter_expression = f"scale=320:-2,select=gt(scene\,{scene_threshold:.3f}),showinfo"
+    filter_expression = f"scale=320:-2,select=gt(scene\\,{scene_threshold:.3f}),showinfo"
     process = await asyncio.create_subprocess_exec(
         ffmpeg, "-hide_banner", "-nostdin", "-threads", "1",
         "-filter_threads", "1", "-loglevel", "info",
@@ -174,7 +174,8 @@ async def sample_candidate_frames(
         process = await asyncio.create_subprocess_exec(
             ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
             "-i", str(source), "-t", f"{window:.3f}",
-            "-vf", f"fps=1/{interval_seconds:g}:start_time=0,scale=320:-2",
+            "-vf", f"select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval_seconds:g}),scale=320:-2",
+            "-fps_mode", "vfr",
             "-frames:v", str(frame_count),
             "-q:v", "9", output_pattern,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
