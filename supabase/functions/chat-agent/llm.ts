@@ -261,7 +261,7 @@ export async function complete(
 // Analyse d'image (vision) : lecture seule, aucune génération d'image.
 export async function describeImage(cfg: LlmCfg, imageUrl: string, instruction: string): Promise<{ text: string; usage: { input: number; output: number } }> {
   if (cfg.provider === "anthropic") {
-    const inlineJpeg = imageUrl.match(/^data:image\\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
+    const inlineJpeg = imageUrl.match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
     const source = inlineJpeg
       ? { type: "base64", media_type: "image/jpeg", data: inlineJpeg[1] }
       : { type: "url", url: imageUrl };
