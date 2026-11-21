@@ -1,10 +1,28 @@
 from pathlib import Path
-from app.media.ffmpeg import run_ffmpeg
+from app.media.ffmpeg import run_ffmpeg, probe_media, FFmpegError
+import math
 
 CAMERA_TYPES = {"none", "ken_burns", "dolly", "pan", "tilt", "zoom_in", "zoom_out"}
 
 async def normalize_video(source: Path, destination: Path, width: int, height: int, fps: int,
                          start: float, duration: float, camera: str = "none") -> None:
+    if not math.isfinite(start) or start < 0 or not math.isfinite(duration) or duration <= 0:
+        raise FFmpegError("Plage temporelle de la vidéo source invalide.")
+    probe = await probe_media(str(source))
+    video = next((stream for stream in probe.get("streams", [])
+                  if stream.get("codec_type") == "video"), None)
+    if not video:
+        raise FFmpegError("Le média source ne contient pas de flux vidéo.")
+    try:
+        source_duration = float(probe.get("format", {}).get("duration", 0))
+    except (ValueError, TypeError):
+        raise FFmpegError("Durée vidéo source inconnue.") from None
+    # Do not silently freeze the last frame to cover a wrong edit decision.
+    if not math.isfinite(source_duration) or source_duration <= 0 or start + duration > source_duration + 0.06:
+        raise FFmpegError(
+            f"Passage demandé [{start:.2f}s, {start + duration:.2f}s] "
+            f"hors de la vidéo source ({source_duration:.2f}s)."
+        )
     camera = camera if camera in CAMERA_TYPES else "none"
     if camera == "none":
         vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1,fps={fps}"
