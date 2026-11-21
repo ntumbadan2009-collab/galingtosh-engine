@@ -286,6 +286,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const outSec = numIn(req(a, "outSec"), "outSec", 0.1, 3600);
       if (outSec <= inSec) fail("outSec doit être supérieur à inSec");
       const sh: Json = { id: nid("sh"), order: 0, camera: camera(a.camera, warnings), inSec, outSec };
+      if (a.sourceInSec !== undefined) sh.sourceInSec = numIn(a.sourceInSec, "sourceInSec", 0, 36000);
       if (a.mediaRef) { mediaIn(f, a.mediaRef); sh.mediaRef = a.mediaRef; }
       if (outSec > s.durationSec) warnings.push(`Le plan dépasse la durée de la scène (${outSec}s > ${s.durationSec}s).`);
       insertAt(s.shots, sh, a.position);
@@ -298,6 +299,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       if (a.camera !== undefined) shot.camera = camera(a.camera, warnings);
       if (a.inSec !== undefined) shot.inSec = numIn(a.inSec, "inSec", 0, 3600);
       if (a.outSec !== undefined) shot.outSec = numIn(a.outSec, "outSec", 0.1, 3600);
+      if (a.sourceInSec !== undefined) shot.sourceInSec = numIn(a.sourceInSec, "sourceInSec", 0, 36000);
       if (shot.outSec <= shot.inSec) fail("outSec doit être supérieur à inSec");
       if (a.mediaRef !== undefined) {
         if (a.mediaRef === null) delete shot.mediaRef; else { mediaIn(f, a.mediaRef); shot.mediaRef = a.mediaRef; }
