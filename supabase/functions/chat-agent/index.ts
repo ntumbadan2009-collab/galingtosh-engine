@@ -6,7 +6,8 @@ import { summarizeFilm } from "./film.ts";
 
 const MAX_STEPS = 10;
 const HISTORY_LIMIT = 40;
-const DEADLINE_MS = 120_000;
+// Keep time to persist a clear response even when the model provider times out.
+const DEADLINE_MS = 85_000;
 const HOURLY_LIMIT = Number(Deno.env.get("AGENT_HOURLY_LIMIT") ?? 60);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -127,7 +128,8 @@ async function handle(req: Request): Promise<Response> {
     }, 503);
   }
 
-  cfg.deadlineAt = started + 110_000;
+  // Model calls must stop before the function runtime is forced to terminate.
+  cfg.deadlineAt = started + 95_000;
 
   // Limite horaire (contrôle des coûts)
   const since = new Date(Date.now() - 3600_000).toISOString();
@@ -213,8 +215,22 @@ async function handle(req: Request): Promise<Response> {
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
-      if (Date.now() - started > DEADLINE_MS) { reply = "Je n'ai pas pu terminer dans le temps imparti. Les opérations déjà appliquées sont conservées : redemande-moi la suite."; break; }
-      const res = await complete(cfg, system, history, TOOLS);
+      if (Date.now() - started > DEADLINE_MS) {
+        reply = "J'ai enregistré les modifications déjà réalisées. Il reste des étapes à terminer : écris « Continue » dans ce projet pour reprendre sans recommencer.";
+        break;
+      }
+      let res: Awaited<ReturnType<typeof complete>>;
+      try {
+        res = await complete(cfg, system, history, TOOLS);
+      } catch (e) {
+        // Gemini rotation/provider timeouts are not film failures. Make sure
+        // the client receives a durable, recoverable response rather than 500.
+        console.warn("Agent LLM temporarily unavailable:", e instanceof Error ? e.message.slice(0, 350) : String(e));
+        reply = events.length
+          ? "Les modifications déjà effectuées sont enregistrées. La connexion au modèle IA a été interrompue avant la fin. Écris « Continue » pour reprendre les étapes restantes."
+          : "Le modèle IA ne répond pas pour le moment. Ton projet est conservé ; réessaie la demande dans ce projet.";
+        break;
+      }
       ctx.usage.input += res.usage.input; ctx.usage.output += res.usage.output;
 
       if (!res.toolCalls.length) { reply = res.text; break; }
@@ -226,6 +242,12 @@ async function handle(req: Request): Promise<Response> {
       await saveMsg(admin, conversationId!, userId, "assistant", "", { tool_calls: calls });
 
       for (const c of calls) {
+        // Individual mutations are committed, so stop scheduling further
+        // operations once the response budget is nearly consumed.
+        if (Date.now() - started > DEADLINE_MS) {
+          reply = "Les modifications réalisées sont conservées. La demande nécessite plusieurs étapes : écris « Continue » pour terminer la suite.";
+          break;
+        }
         const out = await execTool(ctx, c.name, c.args ?? {});
         events.push({ tool: c.name, ok: !out.isError });
         if (out.metadata?.kind === "render_job") renderJobId = out.metadata.job_id;
