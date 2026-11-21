@@ -120,7 +120,9 @@ async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[
         )
         if payload.include_sample_frames:
             result["sampleFrames"] = await sample_candidate_frames(
-                target, result.get("candidates", []), max_frames=3
+                target, result.get("candidates", []),
+                analyzed_seconds=result["inspectedDurationSec"],
+                interval_seconds=5.0, max_frames=60
             )
         return {"mediaId": payload.media_id, **result}
     except HTTPException:
