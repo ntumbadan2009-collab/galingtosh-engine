@@ -299,9 +299,10 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         });
         if (!response.ok) throw new Error("Inspection des plans indisponible (HTTP " + response.status + ").");
         const inspection = await response.json();
-        const frames = Array.isArray(inspection.sampleFrames) ? inspection.sampleFrames.slice(0, 3) : [];
+        const frames = Array.isArray(inspection.sampleFrames) ? inspection.sampleFrames.slice(0, 60) : [];
         const reviews: Json[] = [];
-        for (const frame of frames) {
+        const reviewStarted = Date.now();
+        const reviewFrame = async (frame: Json): Promise<void> => {
           if (typeof frame?.jpegBase64 !== "string" || frame.jpegBase64.length > 150000) continue;
           try {
             const instruction = "Observe UNIQUEMENT cette image réellement extraite d'une vidéo. " +
@@ -328,6 +329,11 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           } catch {
             // La défaillance de vision ne doit jamais être remplacée par un score inventé.
           }
+        };
+        // Analyze in small concurrent batches with a fixed deadline.
+        // Report partial review explicitly rather than exceeding Edge Function limits.
+        for (let offset = 0; offset < frames.length && Date.now() - reviewStarted < 85_000; offset += 5) {
+          await Promise.all(frames.slice(offset, offset + 5).map((frame: Json) => reviewFrame(frame)));
         }
         const candidates = Array.isArray(inspection.candidates) ? inspection.candidates : [];
         const ranked = reviews.filter((x: Json) => x.relevance >= 0.7 && x.visualQuality >= 0.45)
@@ -340,10 +346,11 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           inspectedDurationSec: inspection.inspectedDurationSec,
           inspectionTruncated: inspection.inspectionTruncated,
           candidateCount: candidates.length, candidates,
-          visualReviews: reviews, visionReviewedCount: reviews.length,
+          visualReviews: reviews, sampledFrameCount: frames.length, samplingIntervalSec: 5,
+          visionReviewedCount: reviews.length, reviewIncomplete: reviews.length < frames.length,
           bestPreviewCandidate: best ? { ...best, candidateIndex: ranked[0].candidateIndex } : null,
           semanticVerified: false,
-          limitation: "Seuls quelques instants visuels ont été examinés. Vérifier l'action et la continuité avant une sélection définitive.",
+          limitation: "Une image toutes les 5 secondes est échantillonnée sur la portion inspectée ; les actions entre deux images ne sont pas garanties.",
         } };
       }
       case "analyze_media": {
