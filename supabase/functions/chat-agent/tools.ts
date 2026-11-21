@@ -283,7 +283,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
       case "inspect_video_clips": {
         const row = await loadAsset(ctx, args.media_asset_id);
         if (row.kind !== "video") throw new Error("L'inspection des passages nécessite une vidéo.");
-        const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\\/$/, "");
+        const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\/$/, "");
         const response = await fetch(`${engine}/media/inspect-clips`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.authToken}` },
