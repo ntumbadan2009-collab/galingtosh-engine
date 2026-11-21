@@ -76,7 +76,7 @@ class SupabaseREST:
         if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", item) for item in ids):
             raise SupabaseError("Identifiant de média invalide.")
         params = {"project_id": f"eq.{project_id}", "id": f"in.({','.join(ids)})",
-                  "select": "id,project_id,kind,source,storage_path,license,provenance,analysis"}
+                  "select": "id,project_id,user_id,kind,source,storage_path,license,provenance,analysis"}
         return (await self._request("GET", "/rest/v1/media_assets", params=params)).json()
 
     async def claim_render_job(self, worker_id: str) -> dict | None:
