@@ -101,19 +101,60 @@ async def test_renderer_respects_source_in_second(tmp_path: Path, monkeypatch):
 
 @pytest.mark.skipif(not FFMPEG_READY, reason="FFmpeg requis")
 @pytest.mark.asyncio
-async def test_rejects_video_source_range_past_end(tmp_path: Path):
+async def test_adapts_short_video_without_freezing_long_tail(tmp_path: Path):
     from app.media.video import normalize_video
-    from app.media.ffmpeg import FFmpegError
+    from app.media.ffmpeg import probe_media
 
     source = tmp_path / "one_second.mp4"
+    output = tmp_path / "long_plan.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=s=160x90:r=24:d=1.5",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True)
+    # Regression: 16.20 s of video should no longer crash when 23.06 s
+    # are requested. Use the same ratio on a small synthetic clip.
+    warning = await normalize_video(source, output, 320, 180, 24,
+                                    0.0, 2.1)
+    probe = await probe_media(str(output))
+    assert "ralentissement" in warning
+    assert abs(float(probe["format"]["duration"]) - 2.1) < 0.15
+
+
+@pytest.mark.skipif(not FFMPEG_READY, reason="FFmpeg requis")
+@pytest.mark.asyncio
+async def test_long_shortage_uses_video_loop_with_warning(tmp_path: Path):
+    from app.media.video import normalize_video
+    from app.media.ffmpeg import probe_media
+
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "long.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=s=160x90:r=24:d=1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True)
+    warning = await normalize_video(source, output, 320, 180, 24, 0, 2.5)
+    assert "répétée" in warning
+    assert abs(float((await probe_media(str(output)))["format"]["duration"]) - 2.5) < 0.15
+
+
+@pytest.mark.skipif(not FFMPEG_READY, reason="FFmpeg requis")
+@pytest.mark.asyncio
+async def test_invalid_source_offset_is_recovered(tmp_path: Path):
+    from app.media.video import normalize_video
+    from app.media.ffmpeg import probe_media
+
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "result.mp4"
     subprocess.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", "color=c=red:s=160x90:r=24:d=1",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+        "-c:v", "libx264", str(source),
     ], check=True)
-    with pytest.raises(FFmpegError, match="hors de la vidéo"):
-        await normalize_video(source, tmp_path / "out.mp4", 320, 180, 24,
-                              0.8, 0.6)
+    warning = await normalize_video(source, output, 320, 180, 24, 8, 0.5)
+    assert "reprise à 0s" in warning
+    assert abs(float((await probe_media(str(output)))["format"]["duration"]) - 0.5) < 0.15
 
 
 @pytest.mark.skipif(not FFMPEG_READY, reason="FFmpeg requis")
