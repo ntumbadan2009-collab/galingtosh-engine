@@ -162,7 +162,7 @@ class FilmRenderer:
                     else:
                         kind = (media or {}).get("kind")
                         if source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
-                            await normalize_video(source, segment, width, height, fps, 0, duration, ((shot.get("camera") or {}).get("type") or "none"))
+                            await normalize_video(source, segment, width, height, fps, float(shot.get("sourceInSec", 0) or 0), duration, ((shot.get("camera") or {}).get("type") or "none"))
                         elif kind in {"image", "svg", "chart"} or source.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
                             camera = ((shot.get("camera") or {}).get("type") or "none")
                             await normalize_image(source, segment, width, height, fps, duration, camera)

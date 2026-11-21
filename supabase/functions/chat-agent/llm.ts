@@ -261,9 +261,13 @@ export async function complete(
 // Analyse d'image (vision) : lecture seule, aucune génération d'image.
 export async function describeImage(cfg: LlmCfg, imageUrl: string, instruction: string): Promise<{ text: string; usage: { input: number; output: number } }> {
   if (cfg.provider === "anthropic") {
+    const inlineJpeg = imageUrl.match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
+    const source = inlineJpeg
+      ? { type: "base64", media_type: "image/jpeg", data: inlineJpeg[1] }
+      : { type: "url", url: imageUrl };
     const j = await post(`${cfg.base}/v1/messages`, { "x-api-key": cfg.key, "anthropic-version": "2023-06-01" }, {
       model: cfg.model, max_tokens: 1024,
-      messages: [{ role: "user", content: [{ type: "image", source: { type: "url", url: imageUrl } }, { type: "text", text: instruction }] }],
+      messages: [{ role: "user", content: [{ type: "image", source }, { type: "text", text: instruction }] }],
     }, budget(cfg));
     return {
       text: (j.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n"),

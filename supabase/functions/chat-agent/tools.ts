@@ -48,9 +48,9 @@ export const TOOLS: ToolDef[] = [
   tool("remove_scene", "Supprime une scène et ses plans.", { scene_id: S() }, ["scene_id"]),
   tool("reorder_scenes", "Réordonne les scènes : fournir TOUS les ids dans le nouvel ordre.", { scene_ids: { type: "array", items: S() } }, ["scene_ids"]),
   tool("add_shot", "Ajoute un plan à une scène. inSec/outSec = bornes du plan dans la scène.",
-    { scene_id: S(), camera: CAM, mediaRef: S("id d'un média déjà présent dans le film"), inSec: N(), outSec: N(), position: N() }, ["scene_id", "outSec"]),
+    { scene_id: S(), camera: CAM, mediaRef: S("id d'un média déjà présent dans le film"), inSec: N(), outSec: N(), sourceInSec: N("début dans la vidéo SOURCE (en secondes), différent de inSec dans la scène"), position: N() }, ["scene_id", "outSec"]),
   tool("update_shot", "Modifie un plan (mediaRef: null pour détacher le média).",
-    { shot_id: S(), camera: CAM, mediaRef: { type: ["string", "null"] }, inSec: N(), outSec: N() }, ["shot_id"]),
+    { shot_id: S(), camera: CAM, mediaRef: { type: ["string", "null"] }, inSec: N(), outSec: N(), sourceInSec: N("temps de début à lire dans le fichier vidéo source") }, ["shot_id"]),
   tool("remove_shot", "Supprime un plan.", { shot_id: S() }, ["shot_id"]),
   tool("set_transition", "Définit la transition appliquée au plan indiqué. Standard : cut, dissolve, fade, slide, zoom, wipe (autres types acceptés mais à supporter par le worker).",
     { at_shot_id: S(), type: S(), durationSec: N() }, ["at_shot_id", "type"]),
@@ -76,6 +76,8 @@ export const TOOLS: ToolDef[] = [
   tool("list_media", "Liste les médias du projet (imports de l'utilisateur et médias trouvés) avec leur analyse."),
   tool("register_uploaded_media", "Ajoute au Film JSON un média déjà importé par l'utilisateur, sans l'affecter à un plan. À utiliser si l'utilisateur demande de rattacher son fichier au projet mais n'a pas choisi de plan. Ne dis pas que le média est monté dans une scène : il est seulement enregistré dans les médias du film.", { media_asset_id: S() }, ["media_asset_id"]),
   tool("attach_media", "Attache un média existant du projet (media_asset_id) à un plan.", { shot_id: S(), media_asset_id: S() }, ["shot_id", "media_asset_id"]),
+  tool("inspect_video_clips", "Inspecte une vidéo réelle, détecte les passages possibles, puis demande à la vision d'évaluer quelques images représentatives par rapport à une intention visuelle précise. L'analyse ne couvre qu'un échantillon de plans et chaque image ne prouve PAS l'action entière. Utiliser sourceInSec après choix d'un passage réellement examiné.",
+    { media_asset_id: S("id du média vidéo appartenant au projet"), visual_intent: S("ce que ce plan doit montrer visuellement, formulé précisément"), min_clip_seconds: N(), max_clip_seconds: N() }, ["media_asset_id", "visual_intent"]),
   tool("analyze_media", "Analyse une image du projet par vision (description, tags, personnes décrites, lieux, couleurs) et enregistre l'analyse. Lecture seule : aucune image n'est générée.",
     { media_asset_id: S() }, ["media_asset_id"]),
   tool("request_render", "Met le film en file de rendu (fige la version courante). Le rendu est exécuté par un worker externe : le résultat n'est pas immédiat."),
@@ -277,6 +279,79 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
       case "attach_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
         return { output: await mutateFilm(ctx, "attach_media", { shot_id: args.shot_id, media: mediaRefFromRow(row) }) };
+      }
+      case "inspect_video_clips": {
+        const row = await loadAsset(ctx, args.media_asset_id);
+        if (row.kind !== "video") throw new Error("L'inspection des passages nécessite une vidéo.");
+        const visualIntent = typeof args.visual_intent === "string" ? args.visual_intent.trim().slice(0, 400) : "";
+        if (!visualIntent) throw new Error("Décris d'abord ce que le plan doit montrer.");
+        const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\/$/, "");
+        const response = await fetch(engine + "/media/inspect-clips", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + ctx.authToken },
+          body: JSON.stringify({
+            project_id: ctx.projectId, user_id: ctx.userId, media_id: row.id,
+            min_clip_seconds: args.min_clip_seconds ?? 1,
+            max_clip_seconds: args.max_clip_seconds ?? 12,
+            include_sample_frames: true,
+          }),
+          signal: AbortSignal.timeout(115_000),
+        });
+        if (!response.ok) throw new Error("Inspection des plans indisponible (HTTP " + response.status + ").");
+        const inspection = await response.json();
+        const frames = Array.isArray(inspection.sampleFrames) ? inspection.sampleFrames.slice(0, 60) : [];
+        const reviews: Json[] = [];
+        const reviewStarted = Date.now();
+        const reviewFrame = async (frame: Json): Promise<void> => {
+          if (typeof frame?.jpegBase64 !== "string" || frame.jpegBase64.length > 150000) return;
+          try {
+            const instruction = "Observe UNIQUEMENT cette image réellement extraite d'une vidéo. " +
+              "L'intention visuelle du plan est : " + visualIntent + ". " +
+              "Réponds uniquement avec un objet JSON : " +
+              '{"description":string,"relevance":number,"visualQuality":number}. ' +
+              "description = ce qui est effectivement visible, sans inventer ce qui arrive avant ou après. " +
+              "relevance = de 0 à 1, correspondance visuelle avec l'intention. " +
+              "visualQuality = de 0 à 1, lisibilité, netteté et cadrage. " +
+              "N'identifie pas les personnes réelles. Une seule image ne prouve pas un mouvement complet.";
+            const vision = await describeImage(ctx.cfg, "data:image/jpeg;base64," + frame.jpegBase64, instruction);
+            ctx.usage.input += vision.usage.input; ctx.usage.output += vision.usage.output;
+            const parsed = parseJsonLoose(vision.text);
+            const relevance = Number(parsed.relevance);
+            const visualQuality = Number(parsed.visualQuality);
+            if (!Number.isFinite(relevance) || !Number.isFinite(visualQuality) ||
+                relevance < 0 || relevance > 1 || visualQuality < 0 || visualQuality > 1) return;
+            reviews.push({
+              candidateIndex: frame.candidateIndex, atSec: frame.atSec,
+              description: typeof parsed.description === "string" ? parsed.description.slice(0, 500) : "",
+              relevance, visualQuality,
+              evidence: "one_actual_frame_only",
+            });
+          } catch {
+            // La défaillance de vision ne doit jamais être remplacée par un score inventé.
+          }
+        };
+        // Analyze in small concurrent batches with a fixed deadline.
+        // Report partial review explicitly rather than exceeding Edge Function limits.
+        for (let offset = 0; offset < frames.length && Date.now() - reviewStarted < 85_000; offset += 5) {
+          await Promise.all(frames.slice(offset, offset + 5).map((frame: Json) => reviewFrame(frame)));
+        }
+        const candidates = Array.isArray(inspection.candidates) ? inspection.candidates : [];
+        const ranked = reviews.filter((x: Json) => x.relevance >= 0.7 && x.visualQuality >= 0.45)
+          .sort((a: Json, b: Json) => (0.75 * b.relevance + 0.25 * b.visualQuality) -
+                                   (0.75 * a.relevance + 0.25 * a.visualQuality));
+        const best = ranked.length ? candidates[ranked[0].candidateIndex] : null;
+        return { output: {
+          mediaId: row.id, analysisLevel: "sampled_single_frame_vision",
+          durationSec: inspection.durationSec,
+          inspectedDurationSec: inspection.inspectedDurationSec,
+          inspectionTruncated: inspection.inspectionTruncated,
+          candidateCount: candidates.length, candidates,
+          visualReviews: reviews, sampledFrameCount: frames.length, samplingIntervalSec: 5,
+          visionReviewedCount: reviews.length, reviewIncomplete: reviews.length < frames.length,
+          bestPreviewCandidate: best ? { ...best, candidateIndex: ranked[0].candidateIndex } : null,
+          semanticVerified: false,
+          limitation: "Une image toutes les 5 secondes est échantillonnée sur la portion inspectée ; les actions entre deux images ne sont pas garanties.",
+        } };
       }
       case "analyze_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
