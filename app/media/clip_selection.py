@@ -170,7 +170,7 @@ async def sample_candidate_frames(source: Path, candidates: list[dict], *, max_f
                 process.kill()
             await process.communicate()
             continue
-        if process.returncode != 0 or not jpeg.startswith(b"\\xff\\xd8") or len(jpeg) > 100_000:
+        if process.returncode != 0 or not jpeg.startswith(b"\xff\xd8") or len(jpeg) > 100_000:
             continue
         samples.append({
             "candidateIndex": index,
