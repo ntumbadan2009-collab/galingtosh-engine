@@ -303,7 +303,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const reviews: Json[] = [];
         const reviewStarted = Date.now();
         const reviewFrame = async (frame: Json): Promise<void> => {
-          if (typeof frame?.jpegBase64 !== "string" || frame.jpegBase64.length > 150000) continue;
+          if (typeof frame?.jpegBase64 !== "string" || frame.jpegBase64.length > 150000) return;
           try {
             const instruction = "Observe UNIQUEMENT cette image réellement extraite d'une vidéo. " +
               "L'intention visuelle du plan est : " + visualIntent + ". " +
@@ -319,7 +319,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
             const relevance = Number(parsed.relevance);
             const visualQuality = Number(parsed.visualQuality);
             if (!Number.isFinite(relevance) || !Number.isFinite(visualQuality) ||
-                relevance < 0 || relevance > 1 || visualQuality < 0 || visualQuality > 1) continue;
+                relevance < 0 || relevance > 1 || visualQuality < 0 || visualQuality > 1) return;
             reviews.push({
               candidateIndex: frame.candidateIndex, atSec: frame.atSec,
               description: typeof parsed.description === "string" ? parsed.description.slice(0, 500) : "",
