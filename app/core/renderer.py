@@ -214,7 +214,7 @@ class FilmRenderer:
                 for shot in scene.get("shots", []):
                     targets[str(shot.get("id"))] = (offset+float(shot.get("inSec",0)), offset+min(length,float(shot.get("outSec",length))))
                 offset += length
-            filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height, targets)
+            filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height, targets, text_directory=work)
             warnings.extend(effect_warnings)
             applied_effect_count = len(filters)
             subtitle_path = work / "captions.srt"
