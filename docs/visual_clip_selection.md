@@ -32,6 +32,8 @@ Requête :
 }
 ```
 
+Avec `include_sample_frames: true`, le moteur extrait au maximum trois images JPEG réelles, distribuées sur la chronologie détectée. Elles sont envoyées uniquement à l'agent authentifié pour une évaluation de leur pertinence visuelle.
+
 La réponse indique :
 - la durée totale et la durée effectivement inspectée ;
 - les passages détectés avec `startSec`, `endSec`, `durationSec` ;
@@ -54,10 +56,9 @@ d'une vraie analyse visuelle (pertinence, qualité, continuité).
 Le modèle réalisateur ne doit pas inventer ces scores ni conclure qu'une
 séquence montre une action sur la seule base du nom du média.
 
-**Phase 2 nécessaire** : échantillonnage de plusieurs images par passage,
-vision-langage ou modèle multimodal, prise en compte de la durée et des
-événements, analyse de continuité avec les plans voisins, et sélection des
-extraits selon l'intention narrative.
+**Évaluation visuelle partielle intégrée :** l'agent peut comparer jusqu'à trois images échantillonnées avec une intention de plan et obtenir une proposition de candidat. C'est un aperçu, pas une certification du passage complet : les actions dans le temps et les plans non échantillonnés restent non vérifiés.
+
+**Phase 2 nécessaire** : observation de plusieurs images successives de chaque passage pertinent, compréhension des événements/mouvements, analyse de continuité avec les plans voisins, validation des droits et sélection définitive selon l'intention narrative.
 
 ## Validation du rendu
 
