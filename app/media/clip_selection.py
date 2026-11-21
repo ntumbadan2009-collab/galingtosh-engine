@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.media.ffmpeg import FFmpegError, probe_media, require_binary
 
-_PTS = re.compile(r"pts_time:\\s*([0-9]+(?:\\.[0-9]+)?)")
+_PTS = re.compile(r"pts_time:\s*([0-9]+(?:\.[0-9]+)?)")
 MAX_INSPECTION_SECONDS = 300.0
 MAX_CANDIDATES = 120
 
@@ -47,7 +47,7 @@ async def inspect_video_passages(
         raise ValueError("Durée de la vidéo invalide.")
     analyzed_seconds = min(total_seconds, MAX_INSPECTION_SECONDS)
     ffmpeg = require_binary("ffmpeg")
-    filter_expression = f"scale=320:-2,select=gt(scene\\,{scene_threshold:.3f}),showinfo"
+    filter_expression = f"scale=320:-2,select=gt(scene\,{scene_threshold:.3f}),showinfo"
     process = await asyncio.create_subprocess_exec(
         ffmpeg, "-hide_banner", "-nostdin", "-threads", "1",
         "-filter_threads", "1", "-loglevel", "info",
