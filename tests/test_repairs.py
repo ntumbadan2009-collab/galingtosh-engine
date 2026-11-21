@@ -52,8 +52,8 @@ async def test_legacy_tts_defaults_resolve_to_supported_voice(tmp_path,monkeypat
     assert files['voice'].is_file() and not warnings
     assert voices==['fr-FR-DeniseNeural']
 
-def test_effect_target_and_top_position():
-    filters,warnings=build_video_filters([{'type':'title_overlay','target':'shot','params':{'text':'Bonjour','position':'top'}}],10,1280,720,{'shot':(3,6)})
+def test_effect_target_and_top_position(tmp_path):
+    filters,warnings=build_video_filters([{'type':'title_overlay','target':'shot','params':{'text':'Bonjour','position':'top'}}],10,1280,720,{'shot':(3,6)},text_directory=tmp_path)
     assert not warnings
     assert "between(t,3.0000,6.0000)" in filters[0]
     assert 'y=2*text_h' in filters[0]
