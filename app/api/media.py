@@ -73,6 +73,7 @@ class InspectClipsRequest(ProbeRequest):
     min_clip_seconds: float = Field(default=1.0, ge=0.5, le=30)
     max_clip_seconds: float = Field(default=12.0, ge=0.5, le=60)
     scene_threshold: float = Field(default=0.30, ge=0.1, le=0.8)
+    include_sample_frames: bool = False
 
 
 @user_router.post("/inspect-clips")
@@ -81,7 +82,7 @@ async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[
 
     The directing agent must visually review candidates before selecting one.
     """
-    from app.media.clip_selection import inspect_video_passages
+    from app.media.clip_selection import inspect_video_passages, sample_candidate_frames
 
     if payload.max_clip_seconds < payload.min_clip_seconds:
         raise HTTPException(status_code=422, detail="Durée maximale inférieure au minimum.")
@@ -117,6 +118,10 @@ async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[
             max_clip_seconds=payload.max_clip_seconds,
             scene_threshold=payload.scene_threshold,
         )
+        if payload.include_sample_frames:
+            result["sampleFrames"] = await sample_candidate_frames(
+                target, result.get("candidates", []), max_frames=4
+            )
         return {"mediaId": payload.media_id, **result}
     except HTTPException:
         raise
