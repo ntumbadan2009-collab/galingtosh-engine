@@ -70,6 +70,8 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
                 errors.append(f"Plan {si+1}.{pi+1} : inSec/outSec invalides.")
             elif _finite_number(duration):
                 if end>duration: warnings.append(f"Plan {si+1}.{pi+1} dépasse la durée de sa scène et sera tronqué.")
+            if "sourceInSec" in shot and (not _finite_number(shot["sourceInSec"]) or shot["sourceInSec"] < 0):
+                errors.append(f"Plan {si+1}.{pi+1} : sourceInSec doit être positif et fini.")
             media_ref=shot.get("mediaRef")
             if media_ref is not None and not isinstance(media_ref,str):
                 errors.append(f"Référence média du plan {si+1}.{pi+1} invalide.")
