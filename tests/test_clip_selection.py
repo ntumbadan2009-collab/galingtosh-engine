@@ -125,13 +125,17 @@ async def test_extracts_real_jpeg_samples(tmp_path: Path):
     source = tmp_path / "source.mp4"
     subprocess.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", "color=c=green:s=320x180:r=24:d=2",
+        "-f", "lavfi", "-i", "color=c=green:s=320x180:r=24:d=12",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
     ], check=True)
-    candidates = [{"startSec": 0.0, "endSec": 1.0},
-                  {"startSec": 1.0, "endSec": 2.0}]
-    samples = await sample_candidate_frames(source, candidates, max_frames=2)
-    assert [sample["candidateIndex"] for sample in samples] == [0, 1]
+    candidates = [{"startSec": 0.0, "endSec": 4.0},
+                  {"startSec": 4.0, "endSec": 8.0},
+                  {"startSec": 8.0, "endSec": 12.0}]
+    samples = await sample_candidate_frames(
+        source, candidates, analyzed_seconds=12.0, max_frames=60,
+    )
+    assert [sample["atSec"] for sample in samples] == [0.0, 5.0, 10.0]
+    assert [sample["candidateIndex"] for sample in samples] == [0, 1, 2]
     for sample in samples:
         jpeg = base64.b64decode(sample["jpegBase64"], validate=True)
         assert jpeg.startswith(bytes([0xFF, 0xD8]))
