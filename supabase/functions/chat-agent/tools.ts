@@ -76,8 +76,8 @@ export const TOOLS: ToolDef[] = [
   tool("list_media", "Liste les médias du projet (imports de l'utilisateur et médias trouvés) avec leur analyse."),
   tool("register_uploaded_media", "Ajoute au Film JSON un média déjà importé par l'utilisateur, sans l'affecter à un plan. À utiliser si l'utilisateur demande de rattacher son fichier au projet mais n'a pas choisi de plan. Ne dis pas que le média est monté dans une scène : il est seulement enregistré dans les médias du film.", { media_asset_id: S() }, ["media_asset_id"]),
   tool("attach_media", "Attache un média existant du projet (media_asset_id) à un plan.", { shot_id: S(), media_asset_id: S() }, ["shot_id", "media_asset_id"]),
-  tool("inspect_video_clips", "Inspecte une vidéo du projet et renvoie des passages temporels candidats détectés à partir des changements visuels. ATTENTION: sans compréhension sémantique ni vérification du contenu visuel. Ne déclare pas un passage pertinent sans vision; utilise ensuite sourceInSec pour sélectionner un extrait validé.",
-    { media_asset_id: S("id du média vidéo appartenant au projet"), min_clip_seconds: N(), max_clip_seconds: N() }, ["media_asset_id"]),
+  tool("inspect_video_clips", "Inspecte une vidéo réelle, détecte les passages possibles, puis demande à la vision d'évaluer quelques images représentatives par rapport à une intention visuelle précise. L'analyse ne couvre qu'un échantillon de plans et chaque image ne prouve PAS l'action entière. Utiliser sourceInSec après choix d'un passage réellement examiné.",
+    { media_asset_id: S("id du média vidéo appartenant au projet"), visual_intent: S("ce que ce plan doit montrer visuellement, formulé précisément"), min_clip_seconds: N(), max_clip_seconds: N() }, ["media_asset_id", "visual_intent"]),
   tool("analyze_media", "Analyse une image du projet par vision (description, tags, personnes décrites, lieux, couleurs) et enregistre l'analyse. Lecture seule : aucune image n'est générée.",
     { media_asset_id: S() }, ["media_asset_id"]),
   tool("request_render", "Met le film en file de rendu (fige la version courante). Le rendu est exécuté par un worker externe : le résultat n'est pas immédiat."),
@@ -283,20 +283,68 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
       case "inspect_video_clips": {
         const row = await loadAsset(ctx, args.media_asset_id);
         if (row.kind !== "video") throw new Error("L'inspection des passages nécessite une vidéo.");
+        const visualIntent = typeof args.visual_intent === "string" ? args.visual_intent.trim().slice(0, 400) : "";
+        if (!visualIntent) throw new Error("Décris d'abord ce que le plan doit montrer.");
         const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\/$/, "");
-        const response = await fetch(`${engine}/media/inspect-clips`, {
+        const response = await fetch(engine + "/media/inspect-clips", {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.authToken}` },
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + ctx.authToken },
           body: JSON.stringify({
             project_id: ctx.projectId, user_id: ctx.userId, media_id: row.id,
             min_clip_seconds: args.min_clip_seconds ?? 1,
             max_clip_seconds: args.max_clip_seconds ?? 12,
+            include_sample_frames: true,
           }),
           signal: AbortSignal.timeout(115_000),
         });
-        if (!response.ok) throw new Error(`Inspection des plans indisponible (HTTP ${response.status}).`);
+        if (!response.ok) throw new Error("Inspection des plans indisponible (HTTP " + response.status + ").");
         const inspection = await response.json();
-        return { output: inspection };
+        const frames = Array.isArray(inspection.sampleFrames) ? inspection.sampleFrames.slice(0, 3) : [];
+        const reviews: Json[] = [];
+        for (const frame of frames) {
+          if (typeof frame?.jpegBase64 !== "string" || frame.jpegBase64.length > 150000) continue;
+          try {
+            const instruction = "Observe UNIQUEMENT cette image réellement extraite d'une vidéo. " +
+              "L'intention visuelle du plan est : " + visualIntent + ". " +
+              "Réponds uniquement avec un objet JSON : " +
+              '{"description":string,"relevance":number,"visualQuality":number}. ' +
+              "description = ce qui est effectivement visible, sans inventer ce qui arrive avant ou après. " +
+              "relevance = de 0 à 1, correspondance visuelle avec l'intention. " +
+              "visualQuality = de 0 à 1, lisibilité, netteté et cadrage. " +
+              "N'identifie pas les personnes réelles. Une seule image ne prouve pas un mouvement complet.";
+            const vision = await describeImage(ctx.cfg, "data:image/jpeg;base64," + frame.jpegBase64, instruction);
+            ctx.usage.input += vision.usage.input; ctx.usage.output += vision.usage.output;
+            const parsed = parseJsonLoose(vision.text);
+            const relevance = Number(parsed.relevance);
+            const visualQuality = Number(parsed.visualQuality);
+            if (!Number.isFinite(relevance) || !Number.isFinite(visualQuality) ||
+                relevance < 0 || relevance > 1 || visualQuality < 0 || visualQuality > 1) continue;
+            reviews.push({
+              candidateIndex: frame.candidateIndex, atSec: frame.atSec,
+              description: typeof parsed.description === "string" ? parsed.description.slice(0, 500) : "",
+              relevance, visualQuality,
+              evidence: "one_actual_frame_only",
+            });
+          } catch {
+            // La défaillance de vision ne doit jamais être remplacée par un score inventé.
+          }
+        }
+        const candidates = Array.isArray(inspection.candidates) ? inspection.candidates : [];
+        const ranked = reviews.filter((x: Json) => x.relevance >= 0.7 && x.visualQuality >= 0.45)
+          .sort((a: Json, b: Json) => (0.75 * b.relevance + 0.25 * b.visualQuality) -
+                                   (0.75 * a.relevance + 0.25 * a.visualQuality));
+        const best = ranked.length ? candidates[ranked[0].candidateIndex] : null;
+        return { output: {
+          mediaId: row.id, analysisLevel: "sampled_single_frame_vision",
+          durationSec: inspection.durationSec,
+          inspectedDurationSec: inspection.inspectedDurationSec,
+          inspectionTruncated: inspection.inspectionTruncated,
+          candidateCount: candidates.length, candidates,
+          visualReviews: reviews, visionReviewedCount: reviews.length,
+          bestPreviewCandidate: best ? { ...best, candidateIndex: ranked[0].candidateIndex } : null,
+          semanticVerified: false,
+          limitation: "Seuls quelques instants visuels ont été examinés. Vérifier l'action et la continuité avant une sélection définitive.",
+        } };
       }
       case "analyze_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
