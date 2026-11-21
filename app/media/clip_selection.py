@@ -136,3 +136,45 @@ def choose_reviewed_passage(
     score, index, selected = max(ranked, key=lambda r: (r[0], -r[1]))
     return {**selected, "candidateIndex": index, "reviewScore": round(score, 4),
             "semanticVerified": True, "evidence": "external_visual_review"}
+
+async def sample_candidate_frames(source: Path, candidates: list[dict], *, max_frames: int = 4) -> list[dict]:
+    """Return a bounded set of actual JPEG samples for the vision reviewer.
+
+    Samples are drawn across the complete detected timeline. A single frame
+    proves only what is visible at that instant, never a whole motion event.
+    """
+    import base64
+
+    if not 1 <= max_frames <= 6:
+        raise ValueError("Nombre d'images d'inspection invalide.")
+    if not candidates:
+        return []
+    count = min(max_frames, len(candidates))
+    indices = sorted({round(i * (len(candidates) - 1) / max(1, count - 1)) for i in range(count)})
+    ffmpeg = require_binary("ffmpeg")
+    samples = []
+    for index in indices:
+        shot = candidates[index]
+        midpoint = (float(shot["startSec"]) + float(shot["endSec"])) / 2
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-ss", f"{midpoint:.3f}", "-i", str(source),
+            "-frames:v", "1", "-vf", "scale=320:-2",
+            "-q:v", "8", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            jpeg, _ = await asyncio.wait_for(process.communicate(), timeout=12)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            if process.returncode is None:
+                process.kill()
+            await process.communicate()
+            continue
+        if process.returncode != 0 or not jpeg.startswith(b"\\xff\\xd8") or len(jpeg) > 100_000:
+            continue
+        samples.append({
+            "candidateIndex": index,
+            "atSec": round(midpoint, 3),
+            "jpegBase64": base64.b64encode(jpeg).decode("ascii"),
+        })
+    return samples
