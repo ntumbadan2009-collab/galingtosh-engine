@@ -57,11 +57,16 @@ async def inspect_video_passages(
     )
     try:
         _, stderr = await asyncio.wait_for(process.communicate(), timeout=75)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except asyncio.TimeoutError:
         if process.returncode is None:
             process.kill()
         await process.communicate()
-        raise FFmpegError("Analyse des changements de plans interrompue.") from None
+        raise FFmpegError("Délai maximal d'analyse vidéo dépassé.") from None
+    except asyncio.CancelledError:
+        if process.returncode is None:
+            process.kill()
+        await process.communicate()
+        raise
     if process.returncode != 0:
         raise FFmpegError("Détection des plans impossible.")
 
@@ -165,11 +170,16 @@ async def sample_candidate_frames(source: Path, candidates: list[dict], *, max_f
         )
         try:
             jpeg, _ = await asyncio.wait_for(process.communicate(), timeout=12)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.TimeoutError:
             if process.returncode is None:
                 process.kill()
             await process.communicate()
             continue
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+            await process.communicate()
+            raise
         if process.returncode != 0 or not jpeg.startswith(b"\xff\xd8") or len(jpeg) > 100_000:
             continue
         samples.append({
