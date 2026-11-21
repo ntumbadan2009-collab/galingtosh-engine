@@ -48,9 +48,9 @@ export const TOOLS: ToolDef[] = [
   tool("remove_scene", "Supprime une scène et ses plans.", { scene_id: S() }, ["scene_id"]),
   tool("reorder_scenes", "Réordonne les scènes : fournir TOUS les ids dans le nouvel ordre.", { scene_ids: { type: "array", items: S() } }, ["scene_ids"]),
   tool("add_shot", "Ajoute un plan à une scène. inSec/outSec = bornes du plan dans la scène.",
-    { scene_id: S(), camera: CAM, mediaRef: S("id d'un média déjà présent dans le film"), inSec: N(), outSec: N(), position: N() }, ["scene_id", "outSec"]),
+    { scene_id: S(), camera: CAM, mediaRef: S("id d'un média déjà présent dans le film"), inSec: N(), outSec: N(), sourceInSec: N("début dans la vidéo SOURCE (en secondes), différent de inSec dans la scène"), position: N() }, ["scene_id", "outSec"]),
   tool("update_shot", "Modifie un plan (mediaRef: null pour détacher le média).",
-    { shot_id: S(), camera: CAM, mediaRef: { type: ["string", "null"] }, inSec: N(), outSec: N() }, ["shot_id"]),
+    { shot_id: S(), camera: CAM, mediaRef: { type: ["string", "null"] }, inSec: N(), outSec: N(), sourceInSec: N("temps de début à lire dans le fichier vidéo source") }, ["shot_id"]),
   tool("remove_shot", "Supprime un plan.", { shot_id: S() }, ["shot_id"]),
   tool("set_transition", "Définit la transition appliquée au plan indiqué. Standard : cut, dissolve, fade, slide, zoom, wipe (autres types acceptés mais à supporter par le worker).",
     { at_shot_id: S(), type: S(), durationSec: N() }, ["at_shot_id", "type"]),
@@ -76,6 +76,8 @@ export const TOOLS: ToolDef[] = [
   tool("list_media", "Liste les médias du projet (imports de l'utilisateur et médias trouvés) avec leur analyse."),
   tool("register_uploaded_media", "Ajoute au Film JSON un média déjà importé par l'utilisateur, sans l'affecter à un plan. À utiliser si l'utilisateur demande de rattacher son fichier au projet mais n'a pas choisi de plan. Ne dis pas que le média est monté dans une scène : il est seulement enregistré dans les médias du film.", { media_asset_id: S() }, ["media_asset_id"]),
   tool("attach_media", "Attache un média existant du projet (media_asset_id) à un plan.", { shot_id: S(), media_asset_id: S() }, ["shot_id", "media_asset_id"]),
+  tool("inspect_video_clips", "Inspecte une vidéo du projet et renvoie des passages temporels candidats détectés à partir des changements visuels. ATTENTION: sans compréhension sémantique ni vérification du contenu visuel. Ne déclare pas un passage pertinent sans vision; utilise ensuite sourceInSec pour sélectionner un extrait validé.",
+    { media_asset_id: S("id du média vidéo appartenant au projet"), min_clip_seconds: N(), max_clip_seconds: N() }, ["media_asset_id"]),
   tool("analyze_media", "Analyse une image du projet par vision (description, tags, personnes décrites, lieux, couleurs) et enregistre l'analyse. Lecture seule : aucune image n'est générée.",
     { media_asset_id: S() }, ["media_asset_id"]),
   tool("request_render", "Met le film en file de rendu (fige la version courante). Le rendu est exécuté par un worker externe : le résultat n'est pas immédiat."),
@@ -277,6 +279,24 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
       case "attach_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
         return { output: await mutateFilm(ctx, "attach_media", { shot_id: args.shot_id, media: mediaRefFromRow(row) }) };
+      }
+      case "inspect_video_clips": {
+        const row = await loadAsset(ctx, args.media_asset_id);
+        if (row.kind !== "video") throw new Error("L'inspection des passages nécessite une vidéo.");
+        const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\\/$/, "");
+        const response = await fetch(`${engine}/media/inspect-clips`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.authToken}` },
+          body: JSON.stringify({
+            project_id: ctx.projectId, user_id: ctx.userId, media_id: row.id,
+            min_clip_seconds: args.min_clip_seconds ?? 1,
+            max_clip_seconds: args.max_clip_seconds ?? 12,
+          }),
+          signal: AbortSignal.timeout(115_000),
+        });
+        if (!response.ok) throw new Error(`Inspection des plans indisponible (HTTP ${response.status}).`);
+        const inspection = await response.json();
+        return { output: inspection };
       }
       case "analyze_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
