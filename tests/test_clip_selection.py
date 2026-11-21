@@ -97,3 +97,20 @@ async def test_renderer_respects_source_in_second(tmp_path: Path, monkeypatch):
         film, {"video": source}, tmp_path / "result.mp4"
     )
     assert seen == [1.0]
+
+
+@pytest.mark.skipif(not FFMPEG_READY, reason="FFmpeg requis")
+@pytest.mark.asyncio
+async def test_rejects_video_source_range_past_end(tmp_path: Path):
+    from app.media.video import normalize_video
+    from app.media.ffmpeg import FFmpegError
+
+    source = tmp_path / "one_second.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=160x90:r=24:d=1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True)
+    with pytest.raises(FFmpegError, match="hors de la vidéo"):
+        await normalize_video(source, tmp_path / "out.mp4", 320, 180, 24,
+                              0.8, 0.6)
