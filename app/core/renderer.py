@@ -162,12 +162,14 @@ class FilmRenderer:
                     else:
                         kind = (media or {}).get("kind")
                         if source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
-                            await normalize_video(source, segment, width, height, fps, float(shot.get("sourceInSec", 0) or 0), duration, ((shot.get("camera") or {}).get("type") or "none"))
+                            adjustment = await normalize_video(source, segment, width, height, fps, float(shot.get("sourceInSec", 0) or 0), duration, ((shot.get("camera") or {}).get("type") or "none"))
+                            if adjustment: warnings.append(f"Plan {shot.get('id', shot_index+1)} : {adjustment}")
                         elif kind in {"image", "svg", "chart"} or source.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
                             camera = ((shot.get("camera") or {}).get("type") or "none")
                             await normalize_image(source, segment, width, height, fps, duration, camera)
                         elif kind == "video" or source.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
-                            await normalize_video(source, segment, width, height, fps, float(shot.get("sourceInSec", 0)), duration, ((shot.get("camera") or {}).get("type") or "none"))
+                            adjustment = await normalize_video(source, segment, width, height, fps, float(shot.get("sourceInSec", 0)), duration, ((shot.get("camera") or {}).get("type") or "none"))
+                            if adjustment: warnings.append(f"Plan {shot.get('id', shot_index+1)} : {adjustment}")
                         else:
                             warnings.append(f"Type de média non visuel pour le plan {shot_index+1}.")
                             await self._black(segment, width, height, fps, duration)
