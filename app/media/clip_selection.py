@@ -142,49 +142,76 @@ def choose_reviewed_passage(
     return {**selected, "candidateIndex": index, "reviewScore": round(score, 4),
             "semanticVerified": True, "evidence": "external_visual_review"}
 
-async def sample_candidate_frames(source: Path, candidates: list[dict], *, max_frames: int = 4) -> list[dict]:
-    """Return a bounded set of actual JPEG samples for the vision reviewer.
+async def sample_candidate_frames(
+    source: Path,
+    candidates: list[dict],
+    *,
+    analyzed_seconds: float,
+    interval_seconds: float = 5.0,
+    max_frames: int = 60,
+) -> list[dict]:
+    """Sample real video frames every five seconds across the inspected window.
 
-    Samples are drawn across the complete detected timeline. A single frame
-    proves only what is visible at that instant, never a whole motion event.
+    One FFmpeg process extracts all images, avoiding a process launch per frame.
+    Each frame maps to the candidate that covers its timestamp. A single image
+    cannot verify an action that evolves between frames.
     """
     import base64
+    import tempfile
 
-    if not 1 <= max_frames <= 6:
-        raise ValueError("Nombre d'images d'inspection invalide.")
+    if not 1 <= max_frames <= 60 or not 1 <= interval_seconds <= 60:
+        raise ValueError("Paramètres d'échantillonnage invalides.")
+    if not math.isfinite(analyzed_seconds) or analyzed_seconds <= 0:
+        raise ValueError("Durée inspectée invalide.")
     if not candidates:
         return []
-    count = min(max_frames, len(candidates))
-    indices = sorted({round(i * (len(candidates) - 1) / max(1, count - 1)) for i in range(count)})
+
+    window = min(analyzed_seconds, MAX_INSPECTION_SECONDS)
+    frame_count = min(max_frames, math.ceil(window / interval_seconds))
     ffmpeg = require_binary("ffmpeg")
-    samples = []
-    for index in indices:
-        shot = candidates[index]
-        midpoint = (float(shot["startSec"]) + float(shot["endSec"])) / 2
+    with tempfile.TemporaryDirectory(prefix="galingtosh-frames-") as directory:
+        output_pattern = str(Path(directory) / "sample_%04d.jpg")
         process = await asyncio.create_subprocess_exec(
-            ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
-            "-ss", f"{midpoint:.3f}", "-i", str(source),
-            "-frames:v", "1", "-vf", "scale=320:-2",
-            "-q:v", "8", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            "-i", str(source), "-t", f"{window:.3f}",
+            "-vf", f"fps=1/{interval_seconds:g}:start_time=0,scale=320:-2",
+            "-frames:v", str(frame_count),
+            "-q:v", "9", output_pattern,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
         try:
-            jpeg, _ = await asyncio.wait_for(process.communicate(), timeout=12)
+            _, error = await asyncio.wait_for(process.communicate(), timeout=75)
         except asyncio.TimeoutError:
             if process.returncode is None:
                 process.kill()
             await process.communicate()
-            continue
+            raise FFmpegError("Délai maximal d'échantillonnage vidéo dépassé.") from None
         except asyncio.CancelledError:
             if process.returncode is None:
                 process.kill()
             await process.communicate()
             raise
-        if process.returncode != 0 or not jpeg.startswith(b"\xff\xd8") or len(jpeg) > 100_000:
-            continue
-        samples.append({
-            "candidateIndex": index,
-            "atSec": round(midpoint, 3),
-            "jpegBase64": base64.b64encode(jpeg).decode("ascii"),
-        })
-    return samples
+        if process.returncode != 0:
+            raise FFmpegError("Extraction des images de référence impossible.")
+
+        samples = []
+        candidate_index = 0
+        for index, image_file in enumerate(sorted(Path(directory).glob("sample_*.jpg"))):
+            timestamp = index * interval_seconds
+            if timestamp >= window:
+                break
+            while (candidate_index + 1 < len(candidates)
+                   and float(candidates[candidate_index]["endSec"]) <= timestamp):
+                candidate_index += 1
+            candidate = candidates[candidate_index]
+            valid_candidate = (float(candidate["startSec"]) <= timestamp
+                               < float(candidate["endSec"]))
+            jpeg = image_file.read_bytes()
+            if not valid_candidate or not jpeg.startswith(b"\xff\xd8") or len(jpeg) > 100_000:
+                continue
+            samples.append({
+                "candidateIndex": candidate_index,
+                "atSec": round(timestamp, 3),
+                "jpegBase64": base64.b64encode(jpeg).decode("ascii"),
+            })
+        return samples
