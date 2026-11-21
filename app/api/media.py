@@ -66,3 +66,56 @@ async def probe(request: Request, payload: ProbeRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Le média ne peut pas être analysé.") from None
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+class InspectClipsRequest(ProbeRequest):
+    min_clip_seconds: float = Field(default=1.0, ge=0.5, le=30)
+    max_clip_seconds: float = Field(default=12.0, ge=0.5, le=60)
+    scene_threshold: float = Field(default=0.30, ge=0.1, le=0.8)
+
+
+@router.post("/inspect-clips")
+async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[str, Any]:
+    """Return actual shot boundaries, not fabricated semantic assessments.
+
+    The directing agent must visually review candidates before selecting one.
+    """
+    from app.media.clip_selection import inspect_video_passages
+
+    if payload.max_clip_seconds < payload.min_clip_seconds:
+        raise HTTPException(status_code=422, detail="Durée maximale inférieure au minimum.")
+    db = getattr(request.app.state, "supabase", None)
+    if not isinstance(db, SupabaseREST):
+        raise HTTPException(status_code=503, detail="Stockage média indisponible.")
+    rows = await db.read_media_assets(payload.project_id, [payload.media_id])
+    if not rows:
+        raise HTTPException(status_code=404, detail="Média introuvable.")
+    row = rows[0]
+    if row.get("kind") != "video":
+        raise HTTPException(status_code=422, detail="Analyse réservée aux vidéos.")
+    directory = Path(tempfile.mkdtemp(prefix="galingtosh-clips-"))
+    target = directory / "source"
+    try:
+        if row.get("source") == "upload":
+            await db.download_user_upload(str(row.get("storage_path") or ""),
+                                          payload.user_id, target, 200 * 1024 * 1024)
+        elif row.get("source") == "search":
+            provenance = row.get("provenance") or {}
+            url = provenance.get("download_url") or provenance.get("preview_url")
+            if not url:
+                raise HTTPException(status_code=422, detail="URL du média absente.")
+            await download_public_media(str(url), target, 200 * 1024 * 1024)
+        else:
+            raise HTTPException(status_code=422, detail="Source média non prise en charge.")
+        result = await inspect_video_passages(
+            target, min_clip_seconds=payload.min_clip_seconds,
+            max_clip_seconds=payload.max_clip_seconds,
+            scene_threshold=payload.scene_threshold,
+        )
+        return {"mediaId": payload.media_id, **result}
+    except HTTPException:
+        raise
+    except (OSError, ValueError, FFmpegError):
+        raise HTTPException(status_code=422, detail="Analyse des passages impossible.") from None
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
