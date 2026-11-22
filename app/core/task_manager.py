@@ -56,6 +56,11 @@ class TaskManager:
                 if job:
                     await self.process_job(job)
                     continue
+                # Durable production planning uses the same sequential worker.
+                # Prioritize queued renders; a tick performs a single tool call.
+                result = await self.db.run_production_tick()
+                if result == "advanced":
+                    continue
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -242,6 +247,7 @@ class TaskManager:
                 "progress": 100,
                 "output_path": output_object,
                 "warnings": warnings,
+                "technical_report": {k: v for k, v in result.items() if k != "output"},
                 "finished_at": datetime.now(timezone.utc).isoformat(),
             })
             self.current["step"] = "terminé"
