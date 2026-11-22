@@ -90,7 +90,9 @@ async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[
     if not isinstance(db, SupabaseREST):
         raise HTTPException(status_code=503, detail="Stockage média indisponible.")
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    authenticated_id = await db.authenticated_user_id(token)
+    mission_id = request.headers.get("X-Production-Mission", "")
+    authenticated_id = (await db.production_user_id(token, mission_id) if mission_id
+                        else await db.authenticated_user_id(token))
     if not authenticated_id or authenticated_id != payload.user_id:
         raise HTTPException(status_code=401, detail="Session invalide.")
     rows = await db.read_media_assets(payload.project_id, [payload.media_id])
