@@ -8,6 +8,7 @@ export interface Ctx {
   admin: any;
   userId: string;
   authToken: string;
+  productionMissionId?: string;
   conversationId: string;
   projectId: string | null;
   cfg: LlmCfg;
@@ -143,16 +144,22 @@ async function measureNarrations(ctx: Ctx, film: Json) {
   });
   if (!segments.length) return [];
   const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\/$/, "");
+  if(segments.length>40)throw Error("Trop de narrations pour cette version de production.");
+  const measured: Json[] = [];
+  for(let start=0;start<segments.length;start+=20){
   const response = await fetch(`${engine}/narration/measure`, {
-    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.authToken}` },
-    body: JSON.stringify({ segments }), signal: AbortSignal.timeout(105_000),
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.authToken}`, ...(ctx.productionMissionId ? {"X-Production-Mission":ctx.productionMissionId} : {}) },
+    body: JSON.stringify({ segments:segments.slice(start,start+20) }), signal: AbortSignal.timeout(105_000),
   });
   if (!response.ok) {
     const message = await response.text().catch(() => "");
     throw new Error(`Mesure de la narration impossible (${response.status}). ${message.slice(0, 300)}`);
   }
   const result = await response.json();
-  return Array.isArray(result.segments) ? result.segments : [];
+  if(!Array.isArray(result.segments)||result.segments.length!==Math.min(20,segments.length-start))throw Error("Mesure TTS incomplète.");
+  measured.push(...result.segments);
+  }
+  return measured;
 }
 
 function narrationMismatches(measured: Json[]) {
@@ -288,7 +295,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const engine = (Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com").replace(/\/$/, "");
         const response = await fetch(engine + "/media/inspect-clips", {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: "Bearer " + ctx.authToken },
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + ctx.authToken, ...(ctx.productionMissionId ? {"X-Production-Mission":ctx.productionMissionId} : {}) },
           body: JSON.stringify({
             project_id: ctx.projectId, user_id: ctx.userId, media_id: row.id,
             min_clip_seconds: args.min_clip_seconds ?? 1,
