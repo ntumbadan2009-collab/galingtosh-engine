@@ -117,6 +117,22 @@ async function handle(req: Request): Promise<Response> {
   const { data: u, error: ue } = await admin.auth.getUser(token);
   if (ue || !u?.user) return json({ error: "Non authentifié" }, 401);
   const userId = u.user.id;
+  if(body?.action==="approve_production"||body?.action==="control_production"){
+    const missionId=body.mission_id;
+    if(typeof missionId!=="string"||!UUID.test(missionId))return json({error:"Mission invalide"},400);
+    const {data:mission,error:missionError}=await admin.from("production_missions").select("id,status,conversation_id,project_id").eq("id",missionId).eq("user_id",userId).maybeSingle();
+    if(missionError||!mission)return json({error:"Mission introuvable"},404);
+    try{
+      if(body.action==="approve_production"){
+        await approveMission(admin,userId,mission.conversation_id,mission.id);
+      }else{
+        if(!["pause","resume","cancel"].includes(body.command))return json({error:"Commande invalide"},400);
+        const {error}=await admin.rpc("control_production",{p_mission_id:mission.id,p_user_id:userId,p_action:body.command});
+        if(error)throw Error("Commande impossible dans cet état.");
+      }
+      return json({ok:true,production_mission_id:mission.id});
+    }catch{return json({error:"Cette commande est indisponible pour le moment."},409);}
+  }
 
   const message = typeof body?.message === "string" ? body.message.trim() : "";
   if (!message || message.length > 8000) return json({ error: "message requis (1 à 8000 caractères)" }, 400);
