@@ -187,6 +187,8 @@ async function handle(req: Request): Promise<Response> {
       .in("status",["queued","running","waiting_render","paused","needs_review"]).limit(1).maybeSingle();
     if(active){
       const reply=active.status==="needs_review"?"Cette production nécessite une vérification avant de pouvoir reprendre. Le montage est conservé.":"Une production est déjà active sur ce projet. Consulte son activité avant d’envoyer une nouvelle modification.";
+      await saveMsg(admin,conversationId!,userId,"user",message);
+      await saveMsg(admin,conversationId!,userId,"assistant",reply,{production_mission_id:active.id});
       return json({reply,conversation_id:conversationId,project_id:projectId,production_mission_id:active.id,tool_events:[]});
     }
   }
