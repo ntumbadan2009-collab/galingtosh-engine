@@ -77,6 +77,16 @@ class SupabaseREST:
         return str(rows[0]["user_id"]) if rows else None
 
     async def run_production_tick(self) -> str:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        # No idle Edge Function invocations. The queue remains authoritative.
+        rows = (await self._request("GET", "/rest/v1/production_missions", params={
+            "select": "id", "status": "in.(queued,running,waiting_render)",
+            "available_at": f"lte.{now}",
+            "or": f"(lease_until.is.null,lease_until.lt.{now})", "limit": "1",
+        })).json()
+        if not rows:
+            return "idle"
         response = await self._request("POST", "/functions/v1/chat-agent",
             json={"action": "production_tick"}, timeout=250)
         return str(response.json().get("status", "idle"))
