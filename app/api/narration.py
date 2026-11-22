@@ -21,7 +21,10 @@ logger = logging.getLogger("galingtosh.narration_api")
 async def measure(payload: dict[str, Any], request: Request):
     authorization = request.headers.get("Authorization", "")
     token = re.sub(r"^Bearer\s+", "", authorization, flags=re.IGNORECASE).strip()
-    user_id = await request.app.state.supabase.authenticated_user_id(token)
+    db = request.app.state.supabase
+    mission_id = request.headers.get("X-Production-Mission", "")
+    user_id = (await db.production_user_id(token, mission_id) if mission_id
+               else await db.authenticated_user_id(token))
     if not user_id:
         raise HTTPException(status_code=401, detail="Session utilisateur invalide.")
 
