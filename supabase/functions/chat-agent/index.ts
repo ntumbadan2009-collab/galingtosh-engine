@@ -336,7 +336,7 @@ async function handle(req: Request): Promise<Response> {
       if(proposal&&ctx.projectId){
         const p=await proposeMission(ctx,pendingDraft?.goal??message,proposal.args??{});
         proposalId=p.id;
-        reply="Voici la direction créative proposée :\n\n"+p.plan+"\n\nDurée cible : "+p.duration+" s.\n\nTu peux toucher « Valider et produire », écrire « OK » dans le chat, ou me demander de modifier le plan.";
+        reply="J’ai préparé une direction créative pour une vidéo de "+p.duration+" secondes. Ouvre la fiche de proposition pour consulter les détails, touche « Valider et produire », écris « OK » dans le chat, ou demande-moi des modifications.";
         break;
       }
       const calls = res.toolCalls.filter(c=>c.name!=="propose_production").map((c, i) => ({ ...c, id: c.id || `call_${step}_${i}` }));
