@@ -1,10 +1,11 @@
 from __future__ import annotations
 import re
+import hmac
 from pathlib import Path
 from urllib.parse import quote
 import httpx
 
-PATCHABLE_JOB_FIELDS = {"status", "progress", "output_path", "error", "warnings", "finished_at", "updated_at"}
+PATCHABLE_JOB_FIELDS = {"status", "progress", "output_path", "error", "warnings", "finished_at", "updated_at", "technical_report"}
 ALLOWED_UPLOAD_BUCKETS = {"renders", "temp-assets"}
 
 class SupabaseError(RuntimeError):
@@ -60,6 +61,25 @@ class SupabaseREST:
             return str(user_id) if user_id else None
         except SupabaseError:
             return None
+
+    async def production_user_id(self, token: str, mission_id: str) -> str | None:
+        """Only the trusted worker can act without a user session."""
+        if not token or not hmac.compare_digest(token, self.key):
+            return None
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", mission_id):
+            return None
+        from datetime import datetime, timezone
+        rows = (await self._request("GET", "/rest/v1/production_missions", params={
+            "id": f"eq.{mission_id}", "status": "eq.running",
+            "lease_until": f"gt.{datetime.now(timezone.utc).isoformat()}",
+            "select": "user_id", "limit": "1",
+        })).json()
+        return str(rows[0]["user_id"]) if rows else None
+
+    async def run_production_tick(self) -> str:
+        response = await self._request("POST", "/functions/v1/chat-agent",
+            json={"action": "production_tick"}, timeout=250)
+        return str(response.json().get("status", "idle"))
 
     async def read_film(self, project_id: str, version: int) -> dict:
         params = {"project_id": f"eq.{project_id}", "version": f"eq.{version}", "select": "data"}
