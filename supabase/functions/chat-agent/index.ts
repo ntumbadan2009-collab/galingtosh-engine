@@ -4,6 +4,7 @@ import { complete, llmConfig, type NMsg } from "./llm.ts";
 import { execTool, TOOLS, type Ctx } from "./tools.ts";
 import { summarizeFilm } from "./film.ts";
 import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
+import {interpretPlanReply} from "./proposal-intents.ts";
 
 // Wake the render service once in response to a real queued workload.
 // This is dispatch, not a periodic keep-alive. A failed wake leaves the mission intact.
@@ -137,16 +138,27 @@ async function handle(req: Request): Promise<Response> {
     const {data:mission,error:missionError}=await admin.from("production_missions").select("id,status,conversation_id,project_id").eq("id",missionId).eq("user_id",userId).maybeSingle();
     if(missionError||!mission)return json({error:"Mission introuvable"},404);
     try{
+      let reply: string | undefined;
       if(body.action==="approve_production"){
         await approveMission(admin,userId,mission.conversation_id,mission.id);
+        if(mission.status==="draft"){
+          reply="Plan validé. La production est lancée côté serveur ; tu peux suivre les étapes dans le Studio.";
+          await saveMsg(admin,mission.conversation_id,userId,"user","Je valide le plan",{production_mission_id:mission.id});
+          await saveMsg(admin,mission.conversation_id,userId,"assistant",reply,{production_mission_id:mission.id});
+        }
         dispatchProduction();
       }else{
         if(!["pause","resume","cancel"].includes(body.command))return json({error:"Commande invalide"},400);
         const {error}=await admin.rpc("control_production",{p_mission_id:mission.id,p_user_id:userId,p_action:body.command});
         if(error)throw Error("Commande impossible dans cet état.");
         if(body.command==="resume")dispatchProduction();
+        if(body.command==="cancel"&&mission.status==="draft"){
+          reply="Le plan a été refusé. Tu peux décrire un autre projet ou demander une nouvelle proposition.";
+          await saveMsg(admin,mission.conversation_id,userId,"user","Je refuse ce plan",{production_mission_id:mission.id});
+          await saveMsg(admin,mission.conversation_id,userId,"assistant",reply,{production_mission_id:mission.id});
+        }
       }
-      return json({ok:true,production_mission_id:mission.id});
+      return json({ok:true,production_mission_id:mission.id,reply});
     }catch{return json({error:"Cette commande est indisponible pour le moment."},409);}
   }
 
@@ -154,27 +166,6 @@ async function handle(req: Request): Promise<Response> {
   if (!message || message.length > 8000) return json({ error: "message requis (1 à 8000 caractères)" }, 400);
   for (const k of ["conversation_id", "project_id"]) {
     if (body[k] !== undefined && body[k] !== null && (typeof body[k] !== "string" || !UUID.test(body[k]))) return json({ error: `${k} invalide` }, 400);
-  }
-
-  // Configuration du fournisseur IA (variables d'environnement, sinon base + Vault) : jamais de réponse simulée si elle manque.
-  const { cfg, missing } = await llmConfig(admin);
-  if (!cfg) {
-    return json({
-      code: "llm_not_configured",
-      error: "L'agent IA n'est pas configuré sur ce projet (réglages ou clé manquants).",
-      missing,
-    }, 503);
-  }
-
-  // Model calls must stop before the function runtime is forced to terminate.
-  cfg.deadlineAt = started + 52_000;
-
-  // Limite horaire (contrôle des coûts)
-  const since = new Date(Date.now() - 3600_000).toISOString();
-  const { count } = await admin.from("usage_events").select("id", { count: "exact", head: true })
-    .eq("user_id", userId).eq("kind", "agent_request").gte("created_at", since);
-  if ((count ?? 0) >= HOURLY_LIMIT) {
-    return json({ code: "rate_limited", error: "Limite horaire de requêtes atteinte. Réessaie plus tard." }, 429);
   }
 
   // Conversation
@@ -200,20 +191,35 @@ async function handle(req: Request): Promise<Response> {
     conversationId = c.id;
   }
 
-  // A visible plan is approved only by the owner and only after the explicit
-  // confirmation. A generic "ok" without a pending proposal remains chat.
-  const confirmation=/^(?:je valide(?: le plan)?|je confirme(?: le plan)?|je valide la production)[.! ]*$/iu.test(message);
-  if(confirmation&&conversationId&&projectId){
-    const {data:last}=await admin.from("messages").select("metadata").eq("conversation_id",conversationId).eq("user_id",userId).eq("role","assistant").neq("content","").order("created_at",{ascending:false}).limit(1).maybeSingle();
-    const missionId=last?.metadata?.production_proposal_id;
-    if(typeof missionId==="string"&&UUID.test(missionId)){
-      await approveMission(admin,userId,conversationId,missionId);
+  // An "OK" only approves a draft owned by this exact user/project/conversation.
+  // A compound reply ("OK mais...") is always handled as a revision, not consent.
+  let pendingDraft: {id:string;goal:string;plan:string;target_seconds:number}|null=null;
+  if(conversationId&&projectId){
+    const {data,error}=await admin.from("production_missions")
+      .select("id,goal,plan,target_seconds").eq("user_id",userId).eq("project_id",projectId)
+      .eq("conversation_id",conversationId).eq("status","draft")
+      .order("created_at",{ascending:false}).limit(1).maybeSingle();
+    if(error)return json({error:"Impossible de vérifier la proposition en attente."},503);
+    pendingDraft=data;
+  }
+  const planReply=Array.isArray(body.attachments)&&body.attachments.length?null:interpretPlanReply(message);
+  if(pendingDraft&&planReply){
+    const missionId=pendingDraft.id;
+    if(planReply==="approve"){
+      await approveMission(admin,userId,conversationId!,missionId);
       dispatchProduction();
-      const reply="Production approuvée. Je poursuis la mission automatiquement lorsque le moteur est disponible. Tu peux consulter son activité dans le Studio.";
-      await saveMsg(admin,conversationId,userId,"user",message,{production_mission_id:missionId});
-      await saveMsg(admin,conversationId,userId,"assistant",reply,{production_mission_id:missionId});
-      return json({reply,conversation_id:conversationId,project_id:projectId,production_mission_id:missionId,tool_events:[]});
+    }else{
+      const {error}=await admin.rpc("control_production",{
+        p_mission_id:missionId,p_user_id:userId,p_action:"cancel"
+      });
+      if(error)return json({error:"Ce plan ne peut plus être annulé."},409);
     }
+    const reply=planReply==="approve"
+      ?"Plan validé. La production est lancée côté serveur ; tu peux suivre les étapes dans le Studio."
+      :"Le plan a été refusé. Tu peux décrire un autre projet ou demander une nouvelle proposition.";
+    await saveMsg(admin,conversationId!,userId,"user",message,{production_mission_id:missionId});
+    await saveMsg(admin,conversationId!,userId,"assistant",reply,{production_mission_id:missionId});
+    return json({reply,conversation_id:conversationId,project_id:projectId,production_mission_id:missionId,tool_events:[]});
   }
   if(projectId){
     const {data:active}=await admin.from("production_missions").select("id,status").eq("project_id",projectId).eq("user_id",userId)
@@ -224,6 +230,27 @@ async function handle(req: Request): Promise<Response> {
       await saveMsg(admin,conversationId!,userId,"assistant",reply,{production_mission_id:active.id});
       return json({reply,conversation_id:conversationId,project_id:projectId,production_mission_id:active.id,tool_events:[]});
     }
+  }
+
+  // Configuration du fournisseur IA (variables d'environnement, sinon base + Vault) : jamais de réponse simulée si elle manque.
+  const { cfg, missing } = await llmConfig(admin);
+  if (!cfg) {
+    return json({
+      code: "llm_not_configured",
+      error: "L'agent IA n'est pas configuré sur ce projet (réglages ou clé manquants).",
+      missing,
+    }, 503);
+  }
+
+  // Model calls must stop before the function runtime is forced to terminate.
+  cfg.deadlineAt = started + 52_000;
+
+  // Limite horaire (contrôle des coûts)
+  const since = new Date(Date.now() - 3600_000).toISOString();
+  const { count } = await admin.from("usage_events").select("id", { count: "exact", head: true })
+    .eq("user_id", userId).eq("kind", "agent_request").gte("created_at", since);
+  if ((count ?? 0) >= HOURLY_LIMIT) {
+    return json({ code: "rate_limited", error: "Limite horaire de requêtes atteinte. Réessaie plus tard." }, 429);
   }
 
   // Pièces jointes : des media_assets déjà importés par le client dans ce projet
@@ -270,7 +297,11 @@ async function handle(req: Request): Promise<Response> {
       .order("version", { ascending: false }).limit(1).maybeSingle();
     if (film) state = `ÉTAT ACTUEL DU PROJET (version de travail ${film.version}) :\n${summarizeFilm(film.data)}`;
   }
-  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une simple modification locale sans demande de nouvelle production, conserve le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.`;
+  const draftContext=pendingDraft
+    ? `\nPROPOSITION CRÉATIVE EN ATTENTE (NON APPROUVÉE). Objectif original : ${pendingDraft.goal}. Durée cible actuelle : ${pendingDraft.target_seconds} secondes. Proposition actuelle :\n${pendingDraft.plan}\nL'utilisateur peut donner des modifications libres dans le chat. S'il demande un ajustement, appelle UNIQUEMENT propose_production en conservant l'objectif original et les autres éléments non concernés. Ne touche PAS au Film JSON ou aux médias avant validation. Si l'utilisateur pose une question, réponds normalement sans modifier le plan. La réponse courte OK est traitée séparément et n'arrive pas au modèle.`
+    : "";
+  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une simple modification locale sans demande de nouvelle production, conserve le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
+  const availableTools=pendingDraft?[PROPOSAL_TOOL]:[...TOOLS,PROPOSAL_TOOL];
 
   const ctx: Ctx = { admin, userId, authToken: token, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };
   const events: { tool: string; ok: boolean }[] = [];
@@ -286,7 +317,7 @@ async function handle(req: Request): Promise<Response> {
       }
       let res: Awaited<ReturnType<typeof complete>>;
       try {
-        res = await complete(cfg, system, history, [...TOOLS,PROPOSAL_TOOL]);
+        res = await complete(cfg, system, history, availableTools);
       } catch (e) {
         // Gemini rotation/provider timeouts are not film failures. Make sure
         // the client receives a durable, recoverable response rather than 500.
@@ -303,13 +334,13 @@ async function handle(req: Request): Promise<Response> {
       // A proposal ends the turn; no other tool may mutate the film in that batch.
       const proposal=res.toolCalls.find(c=>c.name==="propose_production");
       if(proposal&&ctx.projectId){
-        const p=await proposeMission(ctx,message,proposal.args??{});
+        const p=await proposeMission(ctx,pendingDraft?.goal??message,proposal.args??{});
         proposalId=p.id;
-        reply=p.plan+"\n\nDurée cible : "+p.duration+" s.\n\nSi tu valides cette direction, écris « Je valide ». Je lancerai alors la production.";
+        reply="Voici la direction créative proposée :\n\n"+p.plan+"\n\nDurée cible : "+p.duration+" s.\n\nTu peux toucher « Valider et produire », écrire « OK » dans le chat, ou me demander de modifier le plan.";
         break;
       }
       const calls = res.toolCalls.filter(c=>c.name!=="propose_production").map((c, i) => ({ ...c, id: c.id || `call_${step}_${i}` }));
-      if(!calls.length){reply="Je dois d’abord associer cette proposition à un projet. Donne-moi son titre ou précise ton idée.";break;}
+      if(!calls.length){reply=pendingDraft?"Précise les changements souhaités dans la proposition. Le plan actuel reste enregistré.":"Je dois d’abord associer cette proposition à un projet. Donne-moi son titre ou précise ton idée.";break;}
       // Keep tool-call preambles out of the visible transcript: a model can say
       // "I will do it" before the tool has actually succeeded.
       history.push({ role: "assistant", content: "", tool_calls: calls });
