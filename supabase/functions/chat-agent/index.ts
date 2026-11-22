@@ -3,6 +3,7 @@ import { corsHeaders, json } from "./cors.ts";
 import { complete, llmConfig, type NMsg } from "./llm.ts";
 import { execTool, TOOLS, type Ctx } from "./tools.ts";
 import { summarizeFilm } from "./film.ts";
+import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
 
 const MAX_STEPS = 10;
 const HISTORY_LIMIT = 40;
@@ -107,11 +108,16 @@ async function handle(req: Request): Promise<Response> {
   const started = Date.now();
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const body = await req.json().catch(() => null);
+  if(body?.action==="production_tick"){
+    const secret=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??"";
+    if(!secret||token!==secret)return json({error:"Non autorisé"},403);
+    return json(await productionTick(admin,token,SYSTEM));
+  }
   const { data: u, error: ue } = await admin.auth.getUser(token);
   if (ue || !u?.user) return json({ error: "Non authentifié" }, 401);
   const userId = u.user.id;
 
-  const body = await req.json().catch(() => null);
   const message = typeof body?.message === "string" ? body.message.trim() : "";
   if (!message || message.length > 8000) return json({ error: "message requis (1 à 8000 caractères)" }, 400);
   for (const k of ["conversation_id", "project_id"]) {
@@ -162,6 +168,29 @@ async function handle(req: Request): Promise<Response> {
     conversationId = c.id;
   }
 
+  // A visible plan is approved only by the owner and only after the explicit
+  // confirmation. A generic "ok" without a pending proposal remains chat.
+  const confirmation=/^(?:je valide(?: le plan)?|je confirme(?: le plan)?|je valide la production)[.! ]*$/iu.test(message);
+  if(confirmation&&conversationId&&projectId){
+    const {data:last}=await admin.from("messages").select("metadata").eq("conversation_id",conversationId).eq("user_id",userId).eq("role","assistant").neq("content","").order("created_at",{ascending:false}).limit(1).maybeSingle();
+    const missionId=last?.metadata?.production_proposal_id;
+    if(typeof missionId==="string"&&UUID.test(missionId)){
+      await approveMission(admin,userId,conversationId,missionId);
+      const reply="Production approuvée. Je poursuis la mission automatiquement lorsque le moteur est disponible. Tu peux consulter son activité dans le Studio.";
+      await saveMsg(admin,conversationId,userId,"user",message,{production_mission_id:missionId});
+      await saveMsg(admin,conversationId,userId,"assistant",reply,{production_mission_id:missionId});
+      return json({reply,conversation_id:conversationId,project_id:projectId,production_mission_id:missionId,tool_events:[]});
+    }
+  }
+  if(projectId){
+    const {data:active}=await admin.from("production_missions").select("id,status").eq("project_id",projectId).eq("user_id",userId)
+      .in("status",["queued","running","waiting_render","paused","needs_review"]).limit(1).maybeSingle();
+    if(active){
+      const reply=active.status==="needs_review"?"Cette production nécessite une vérification avant de pouvoir reprendre. Le montage est conservé.":"Une production est déjà active sur ce projet. Consulte son activité avant d’envoyer une nouvelle modification.";
+      return json({reply,conversation_id:conversationId,project_id:projectId,production_mission_id:active.id,tool_events:[]});
+    }
+  }
+
   // Pièces jointes : des media_assets déjà importés par le client dans ce projet
   let attachments: any[] = [];
   if (Array.isArray(body.attachments) && body.attachments.length) {
@@ -206,12 +235,13 @@ async function handle(req: Request): Promise<Response> {
       .order("version", { ascending: false }).limit(1).maybeSingle();
     if (film) state = `ÉTAT ACTUEL DU PROJET (version de travail ${film.version}) :\n${summarizeFilm(film.data)}`;
   }
-  const system = `${SYSTEM}\n\n${state}`;
+  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une simple modification locale sans demande de nouvelle production, conserve le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.`;
 
   const ctx: Ctx = { admin, userId, authToken: token, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };
   const events: { tool: string; ok: boolean }[] = [];
   let reply = "";
   let renderJobId: string | null = null;
+  let proposalId: string | null = null;
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -221,7 +251,7 @@ async function handle(req: Request): Promise<Response> {
       }
       let res: Awaited<ReturnType<typeof complete>>;
       try {
-        res = await complete(cfg, system, history, TOOLS);
+        res = await complete(cfg, system, history, [...TOOLS,PROPOSAL_TOOL]);
       } catch (e) {
         // Gemini rotation/provider timeouts are not film failures. Make sure
         // the client receives a durable, recoverable response rather than 500.
@@ -235,7 +265,16 @@ async function handle(req: Request): Promise<Response> {
 
       if (!res.toolCalls.length) { reply = res.text; break; }
 
-      const calls = res.toolCalls.map((c, i) => ({ ...c, id: c.id || `call_${step}_${i}` }));
+      // A proposal ends the turn; no other tool may mutate the film in that batch.
+      const proposal=res.toolCalls.find(c=>c.name==="propose_production");
+      if(proposal&&ctx.projectId){
+        const p=await proposeMission(ctx,message,proposal.args??{});
+        proposalId=p.id;
+        reply=p.plan+"\n\nDurée cible : "+p.duration+" s.\n\nSi tu valides cette direction, écris « Je valide ». Je lancerai alors la production.";
+        break;
+      }
+      const calls = res.toolCalls.filter(c=>c.name!=="propose_production").map((c, i) => ({ ...c, id: c.id || `call_${step}_${i}` }));
+      if(!calls.length){reply="Je dois d’abord associer cette proposition à un projet. Donne-moi son titre ou précise ton idée.";break;}
       // Keep tool-call preambles out of the visible transcript: a model can say
       // "I will do it" before the tool has actually succeeded.
       history.push({ role: "assistant", content: "", tool_calls: calls });
@@ -274,13 +313,13 @@ async function handle(req: Request): Promise<Response> {
         ? "Les actions demandées ont été enregistrées. Tu peux vérifier le résultat dans ton projet."
         : "Je n’ai pas obtenu de réponse exploitable. Peux-tu reformuler ta demande ?";
   }
-  if (TOOLS.some((t) => reply.toLowerCase().includes(t.name.toLowerCase())) || /\b(?:shot_id|media_asset_id|tool_call_id|tool_calls|conversation_id)\b/i.test(reply)) {
+  if (!proposalId && (TOOLS.some((t) => reply.toLowerCase().includes(t.name.toLowerCase())) || /\b(?:shot_id|media_asset_id|tool_call_id|tool_calls|conversation_id)\b/i.test(reply))) {
     const failedAttachment = events.some((e) => e.tool === "attach_media" && !e.ok);
     reply = failedAttachment
       ? "Je n’ai pas pu placer ce média dans le montage : aucun plan n’a été ciblé. Le fichier reste dans les médias du projet. Choisis un plan ou demande-moi d’en créer un."
       : "Je n’ai pas pu terminer cette étape correctement. Vérifie le résultat dans ton projet avant de réessayer.";
   }
-  await saveMsg(admin, conversationId!, userId, "assistant", reply);
+  await saveMsg(admin, conversationId!, userId, "assistant", reply,proposalId?{production_proposal_id:proposalId}:{});
 
   let filmVersion: number | null = null;
   if (ctx.projectId) {
