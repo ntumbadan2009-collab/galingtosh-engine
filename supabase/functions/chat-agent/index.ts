@@ -5,6 +5,20 @@ import { execTool, TOOLS, type Ctx } from "./tools.ts";
 import { summarizeFilm } from "./film.ts";
 import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
 
+// Wake the render service once in response to a real queued workload.
+// This is dispatch, not a periodic keep-alive. A failed wake leaves the mission intact.
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
+function dispatchProduction():void {
+  const engine=(Deno.env.get("RENDER_ENGINE_URL")??"https://galingtosh-engine.onrender.com").replace(/\/$/,"");
+  EdgeRuntime.waitUntil((async()=>{
+    try{
+      const response=await fetch(engine+"/",{signal:AbortSignal.timeout(120_000)});
+      await response.body?.cancel();
+      if(!response.ok)console.warn("Production en file; moteur momentanément indisponible",response.status);
+    }catch{console.warn("Production en file; réveil du moteur non confirmé.");}
+  })());
+}
+
 const MAX_STEPS = 10;
 const HISTORY_LIMIT = 40;
 // Keep time to persist a clear response even when the model provider times out.
@@ -125,10 +139,12 @@ async function handle(req: Request): Promise<Response> {
     try{
       if(body.action==="approve_production"){
         await approveMission(admin,userId,mission.conversation_id,mission.id);
+        dispatchProduction();
       }else{
         if(!["pause","resume","cancel"].includes(body.command))return json({error:"Commande invalide"},400);
         const {error}=await admin.rpc("control_production",{p_mission_id:mission.id,p_user_id:userId,p_action:body.command});
         if(error)throw Error("Commande impossible dans cet état.");
+        if(body.command==="resume")dispatchProduction();
       }
       return json({ok:true,production_mission_id:mission.id});
     }catch{return json({error:"Cette commande est indisponible pour le moment."},409);}
@@ -192,6 +208,7 @@ async function handle(req: Request): Promise<Response> {
     const missionId=last?.metadata?.production_proposal_id;
     if(typeof missionId==="string"&&UUID.test(missionId)){
       await approveMission(admin,userId,conversationId,missionId);
+      dispatchProduction();
       const reply="Production approuvée. Je poursuis la mission automatiquement lorsque le moteur est disponible. Tu peux consulter son activité dans le Studio.";
       await saveMsg(admin,conversationId,userId,"user",message,{production_mission_id:missionId});
       await saveMsg(admin,conversationId,userId,"assistant",reply,{production_mission_id:missionId});
