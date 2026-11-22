@@ -23,6 +23,7 @@ create table public.production_missions (
  render_job_id uuid references public.render_jobs(id) on delete set null,
  checkpoint jsonb not null default '{}'::jsonb,
  error_code text,
+ requested_action text check(requested_action in ('pause','cancel')),
  unique(user_id,request_id)
 );
 create unique index production_one_active_project on public.production_missions(project_id)
@@ -148,11 +149,18 @@ begin
  update public.production_tasks set status=case when p_ok then 'done' else 'failed' end, result=coalesce(p_result,'{}'::jsonb),finished_at=now()
  where mission_id=m.id and step_no=p_step and status='started';
  if not found then raise exception 'Étape introuvable ou déjà enregistrée'; end if;
- update public.production_missions set status=case when p_render is not null and p_ok then 'waiting_render' else 'queued' end,
+ update public.production_missions set status=case when m.requested_action='cancel' then 'canceled' when m.requested_action='pause' then 'paused' when p_render is not null and p_ok then 'waiting_render' else 'queued' end,
+ requested_action=null,
  render_job_id=coalesce(p_render,render_job_id),checkpoint=jsonb_build_object('last_step',p_step,'ok',p_ok),retry_count=0,
  lease_token=null,lease_until=null,available_at=now()+interval '2 seconds',updated_at=now()
  where id=m.id;
  insert into public.production_events(mission_id,kind,detail) values(m.id,case when p_ok then 'step_done' else 'step_failed' end,case when p_ok then 'Opération confirmée.' else 'Opération échouée.' end);
+ if m.requested_action='cancel' and coalesce(p_render,m.render_job_id) is not null then
+  update public.render_jobs set status='canceled',updated_at=now(),finished_at=now() where id=coalesce(p_render,m.render_job_id) and user_id=m.user_id and project_id=m.project_id and status in ('queued','running');
+ end if;
+ if m.requested_action is not null then
+  insert into public.production_events(mission_id,kind,detail) values(m.id,case m.requested_action when 'pause' then 'paused' else 'canceled' end,'Commande appliquée au point de sauvegarde.');
+ end if;
 end $$;
 
 create function public.release_production(p_mission_id uuid,p_lease uuid,p_status text,p_error text default null,p_delay integer default 15)
@@ -170,10 +178,50 @@ begin
  and abs((r.technical_report->>'duration_seconds')::numeric-m.target_seconds)<=greatest(2,m.target_seconds*0.05)
  and coalesce((r.technical_report->>'width')::integer,0)>0 and coalesce((r.technical_report->>'height')::integer,0)>0
  ) then raise exception 'Fichier final absent ou contrôle technique non validé'; end if;
- update public.production_missions set status=p_status,error_code=left(p_error,100),lease_token=null,lease_until=null,
+ if m.requested_action='cancel' then
+  p_status:='canceled';
+  update public.render_jobs set status='canceled',updated_at=now(),finished_at=now() where id=m.render_job_id and user_id=m.user_id and project_id=m.project_id and status in ('queued','running');
+ elsif m.requested_action='pause' and p_status in ('queued','waiting_render') then p_status:='paused';
+ end if;
+ update public.production_missions set status=p_status,requested_action=null,error_code=left(p_error,100),lease_token=null,lease_until=null,
  available_at=now()+make_interval(secs=>greatest(2,least(p_delay,900))),retry_count=case when p_error is not null then retry_count+1 else retry_count end,updated_at=now() where id=m.id;
  if p_status not in ('queued','waiting_render') then insert into public.production_events(mission_id,kind,detail) values(m.id,p_status,coalesce(left(p_error,100),p_status)); end if;
 end $$;
+
+create function public.control_production(p_mission_id uuid,p_user_id uuid,p_action text)
+returns text language plpgsql security invoker set search_path='' as $$
+declare m public.production_missions; next_status text;
+begin
+ select * into m from public.production_missions where id=p_mission_id and user_id=p_user_id for update;
+ if not found then raise exception 'Mission introuvable'; end if;
+ if p_action not in ('pause','resume','cancel') then raise exception 'Commande invalide'; end if;
+ if p_action='resume' then
+  if m.status<>'paused' then raise exception 'Seule une mission en pause est reprenable'; end if;
+  next_status:=case when m.render_job_id is not null then 'waiting_render' else 'queued' end;
+ elsif p_action='pause' then
+  if m.status not in ('queued','running','waiting_render') then raise exception 'Mission non active'; end if;
+  next_status:='paused';
+ else
+  if m.status in ('done','failed','canceled') then raise exception 'Mission déjà terminée'; end if;
+  next_status:='canceled';
+ end if;
+ if m.lease_until>now() and p_action in ('pause','cancel') then
+  update public.production_missions set requested_action=p_action,updated_at=now() where id=m.id;
+  insert into public.production_events(mission_id,kind,detail) values(m.id,'control_requested','Commande enregistrée, appliquée après l’opération en cours.');
+  return m.status;
+ end if;
+ -- An expired mutation must not be blindly resumed.
+ if exists(select 1 from public.production_tasks where mission_id=m.id and status='started') and p_action='pause' then raise exception 'Vérification nécessaire après interruption'; end if;
+ if p_action='cancel' then
+  update public.production_tasks set status='uncertain',finished_at=now() where mission_id=m.id and status='started';
+  update public.render_jobs set status='canceled',updated_at=now(),finished_at=now() where id=m.render_job_id and project_id=m.project_id and user_id=m.user_id and status in ('queued','running');
+ end if;
+ update public.production_missions set status=next_status,requested_action=null,lease_token=null,lease_until=null,available_at=now(),updated_at=now() where id=m.id;
+ insert into public.production_events(mission_id,kind,detail) values(m.id,next_status,'Commande de l’utilisateur appliquée.');
+ return next_status;
+end $$;
+revoke execute on function public.control_production(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.control_production(uuid,uuid,text) to service_role;
 
 revoke execute on function public.approve_production(uuid,uuid),public.claim_production(),public.begin_production_step(uuid,uuid,text),public.finish_production_step(uuid,uuid,integer,boolean,jsonb,uuid),public.release_production(uuid,uuid,text,text,integer) from public,anon,authenticated;
 grant execute on function public.approve_production(uuid,uuid),public.claim_production(),public.begin_production_step(uuid,uuid,text),public.finish_production_step(uuid,uuid,integer,boolean,jsonb,uuid),public.release_production(uuid,uuid,text,text,integer) to service_role;
