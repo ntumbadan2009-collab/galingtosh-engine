@@ -4,7 +4,7 @@
 export function normalizePlanReply(raw: string): string {
  return raw.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLocaleLowerCase("fr")
   .replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu,"")
-  .replace(/[!,?.…\s]+/g," ").trim();
+  .replace(/[!,'’?.…\s-]+/g," ").trim();
 }
 export type PlanResponse="approve"|"reject"|null;
 export function interpretPlanReply(raw:string):PlanResponse{
