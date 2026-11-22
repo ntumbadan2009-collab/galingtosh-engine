@@ -1,5 +1,6 @@
 -- Additive, isolated foundation for durable production. No existing films or jobs are changed.
 begin;
+alter table public.render_jobs add column if not exists technical_report jsonb;
 create table public.production_missions (
  id uuid primary key default gen_random_uuid(),
  user_id uuid not null references auth.users(id) on delete cascade,
@@ -94,6 +95,7 @@ begin
  if not exists(select 1 from public.projects where id=m.project_id and user_id=m.user_id)
  or not exists(select 1 from public.conversations where id=m.conversation_id and project_id=m.project_id and user_id=m.user_id) then raise exception 'Périmètre invalide'; end if;
  if m.target_seconds>600 then raise exception 'Durée supérieure à la capacité actuelle du moteur'; end if;
+ if exists(select 1 from public.render_jobs where project_id=m.project_id and status in ('queued','running')) then raise exception 'Une production vidéo est déjà en cours'; end if;
  update public.production_missions set status='queued',approved_at=now(),updated_at=now(),available_at=now() where id=m.id;
  insert into public.production_events(mission_id,kind,detail) values(m.id,'approved','Plan approuvé. Mission mise en file.');
  return m.id;
@@ -163,7 +165,11 @@ begin
  if exists(select 1 from public.production_tasks where mission_id=m.id and status='started') then
   raise exception 'Étape en cours non réconciliée';
  end if;
- if p_status='done' and not exists(select 1 from public.render_jobs r join storage.objects o on o.bucket_id='renders' and o.name=r.output_path where r.id=m.render_job_id and r.project_id=m.project_id and r.user_id=m.user_id and r.status='done') then raise exception 'Fichier final absent'; end if;
+ if p_status='done' and not exists(select 1 from public.render_jobs r join storage.objects o on o.bucket_id='renders' and o.name=r.output_path where r.id=m.render_job_id and r.project_id=m.project_id and r.user_id=m.user_id and r.status='done'
+ and jsonb_typeof(r.technical_report->'duration_seconds')='number'
+ and abs((r.technical_report->>'duration_seconds')::numeric-m.target_seconds)<=greatest(2,m.target_seconds*0.05)
+ and coalesce((r.technical_report->>'width')::integer,0)>0 and coalesce((r.technical_report->>'height')::integer,0)>0
+ ) then raise exception 'Fichier final absent ou contrôle technique non validé'; end if;
  update public.production_missions set status=p_status,error_code=left(p_error,100),lease_token=null,lease_until=null,
  available_at=now()+make_interval(secs=>greatest(2,least(p_delay,900))),retry_count=case when p_error is not null then retry_count+1 else retry_count end,updated_at=now() where id=m.id;
  if p_status not in ('queued','waiting_render') then insert into public.production_events(mission_id,kind,detail) values(m.id,p_status,coalesce(left(p_error,100),p_status)); end if;
