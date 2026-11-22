@@ -1,0 +1,17 @@
+name: Orchestrator checks
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno check supabase/functions/chat-agent/index.ts
+      - run: deno test --allow-env supabase/functions/chat-agent/production_test.ts
