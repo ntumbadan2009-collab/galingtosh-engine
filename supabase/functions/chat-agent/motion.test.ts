@@ -28,7 +28,7 @@ Deno.test("Cannot invent a node or reverse narrative order",()=>{
   const quote="La machine classe les lettres, puis elle trie les dossiers.";
   const f=setup(quote);
   fails(()=>applyOperation(f,"add_code_shot",{scene_id:"scene1",visualText:quote,outSec:8,
-    visualType:"steps",visualItems:["10 millions de lettres", "elle trie les dossiers"]}),"citation");
+    visualType:"steps",visualItems:["10 millions de lettres", "elle trie les dossiers"]}),"absent");
   fails(()=>applyOperation(f,"add_code_shot",{scene_id:"scene1",visualText:quote,outSec:8,
     visualType:"steps",visualItems:["elle trie les dossiers","La machine classe les lettres"]}),"ordre");
 });
