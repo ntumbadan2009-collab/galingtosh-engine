@@ -41,6 +41,6 @@ jobs:
         with:
           deno-version: v2.x
       - name: Test film operations
-        run: deno test supabase/functions/chat-agent/film_test.ts
+        run: deno test supabase/functions/chat-agent/film_test.ts supabase/functions/chat-agent/narrative.test.ts
       - name: Check Edge functions
         run: deno check supabase/functions/chat-agent/index.ts supabase/functions/request-render/index.ts supabase/functions/search-media/index.ts
