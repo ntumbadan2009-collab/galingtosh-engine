@@ -14,6 +14,7 @@ from app.media.images import normalize_image
 from app.media.video import normalize_video
 from app.media.transitions import assemble_segments
 from app.media.audio import mix_audio
+from app.media.compression import fit_mp4_to_limit
 from app.media.procedural import compose_bed
 from app.media.subtitles import write_srt
 from app.media.effects import build_video_filters, finish_video
@@ -268,10 +269,16 @@ class FilmRenderer:
             _memory("after_audio_mix")
             if progress_callback: await progress_callback(89, "mixage audio terminé")
             if not has_audio: styled.replace(output)
+            compression = await fit_mp4_to_limit(
+                output, self.max_output_mb,
+                audio_bitrate_kbps=int((film.get("render") or {}).get("audioBitrateKbps", 128)),
+            )
+            if compression.get("recompressed"):
+                warnings.append(
+                    "Fichier volumineux : compression H.264 finale appliquée sans retirer de scènes "
+                    "ni de narration pour respecter la limite d'envoi."
+                )
             size_mb = output.stat().st_size / (1024 * 1024)
-            if size_mb > self.max_output_mb:
-                output.unlink(missing_ok=True)
-                raise RenderError(f"Fichier final supérieur à la limite de {self.max_output_mb} Mo.")
             _memory("before_final_probe")
             probe = await probe_media(str(output))
             _memory("render_complete")
@@ -279,7 +286,7 @@ class FilmRenderer:
             video = next((s for s in streams if s.get("codec_type") == "video"), {})
             return {"output": str(output), "duration_seconds": float(probe.get("format", {}).get("duration", 0)),
                 "width": video.get("width"), "height": video.get("height"), "fps": fps,
-                "size_mb": round(size_mb, 3), "warnings": list(dict.fromkeys(warnings)),
+                "size_mb": round(size_mb, 3), "compression": compression, "warnings": list(dict.fromkeys(warnings)),
                 "audio": any(s.get("codec_type") == "audio" for s in streams),
                 "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count}
         except (OSError, FFmpegError) as exc:
