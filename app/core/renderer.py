@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import logging
 import gc
+from app.core.checkpoints import SceneCheckpoints, fingerprint
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
@@ -84,7 +85,7 @@ class FilmRenderer:
         self.max_seconds = max_seconds
         self.max_output_mb = max_output_mb
 
-    async def render(self, film: dict[str, Any], media_files: dict[str, Path], output: Path, progress_callback: Callable[[int, str], Awaitable[None]] | None = None) -> dict[str, Any]:
+    async def render(self, film: dict[str, Any], media_files: dict[str, Path], output: Path, progress_callback: Callable[[int, str], Awaitable[None]] | None = None, checkpoints: SceneCheckpoints | None = None) -> dict[str, Any]:
         report = validate_film(film)
         if not report["valid"]:
             raise RenderError("Film JSON invalide : " + " ".join(report["errors"][:4]))
@@ -103,12 +104,28 @@ class FilmRenderer:
         segments: list[Path] = []
         segment_shot_ids: list[str | None] = []
         segment_durations: list[float] = []
+        # Includes final narration alignment and all render settings. Altered
+        # scenes, durations or film versions cannot reuse stale segment files.
+        render_signature = fingerprint({"format": 1, "film": film, "resolution": [width, height], "fps": fps})
         try:
             _memory("render_start")
             total_shots = max(1, sum(len(s.get("shots", [])) for s in scenes))
             completed_shots = 0
             for scene_index, scene in enumerate(scenes):
                 _memory(f"scene_{scene_index+1}_start")
+                scene_signature = fingerprint({"render": render_signature, "scene": scene_index})
+                if checkpoints is not None:
+                    previous = await checkpoints.restore(scene_index, scene_signature, work)
+                    if previous:
+                        for part in previous:
+                            segments.append(work / part["name"])
+                            segment_shot_ids.append(part.get("shot_id"))
+                            segment_durations.append(float(part["duration"]))
+                        completed_shots += len(scene.get("shots", []))
+                        if progress_callback:
+                            await progress_callback(min(78, 18 + int(60 * completed_shots / total_shots)),
+                                                    f"scène {scene_index + 1} restaurée")
+                        continue
                 scene_duration = float(scene.get("durationSec", 0))
                 shots = sorted(scene.get("shots", []), key=lambda x: x.get("order", 0))
                 # Some agent plans express each shot's intended length in
@@ -197,6 +214,16 @@ class FilmRenderer:
                         black = work / f"segment_{len(segments):04d}.mp4"
                         await self._black(black, width, height, fps, scene_duration-cursor)
                         segments.append(black); segment_shot_ids.append(None); segment_durations.append(scene_duration-cursor)
+                if checkpoints is not None and len(segments) > scene_segment_start:
+                    completed_scene = [
+                        {"name": path.name, "shot_id": shot_id, "duration": duration}
+                        for path, shot_id, duration in zip(
+                            segments[scene_segment_start:],
+                            segment_shot_ids[scene_segment_start:],
+                            segment_durations[scene_segment_start:],
+                        )
+                    ]
+                    await checkpoints.save(scene_index, scene_signature, completed_scene, work)
                 gc.collect()
                 _memory(f"scene_{scene_index+1}_complete")
             if not segments: raise RenderError("Aucun plan exploitable dans le Film JSON.")
