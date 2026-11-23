@@ -166,8 +166,8 @@ class SupabaseREST:
     def _storage_path(bucket: str, object_path: str) -> str:
         if bucket not in ALLOWED_UPLOAD_BUCKETS:
             raise SupabaseError("Bucket de stockage interdit.")
-        clean = object_path.replace("\\\\", "/")
-        if (clean.startswith("/") or "\\x00" in clean or
+        clean = object_path.replace(chr(92), "/")
+        if (not clean or clean.startswith("/") or chr(0) in clean or
                 any(p in {"", ".", ".."} for p in clean.split("/"))):
             raise SupabaseError("Chemin de stockage invalide.")
         return clean
