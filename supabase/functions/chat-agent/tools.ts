@@ -3,6 +3,8 @@
 import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from "./film.ts";
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
+import { planNarrativeBeats, quotedFromNarration, narrativePreflight,
+         MIN_RELEVANCE, MIN_VISUAL_QUALITY } from "./narrative.ts";
 
 export interface Ctx {
   admin: any;
@@ -48,7 +50,14 @@ export const TOOLS: ToolDef[] = [
   tool("measure_narration", "Synthétise provisoirement chaque narration de scène et renvoie sa durée TTS réelle sans modifier le film. Obligatoire avant le rendu; révise les textes dont la durée s'écarte de la cible, puis remesure.", {}),
   tool("remove_scene", "Supprime une scène et ses plans.", { scene_id: S() }, ["scene_id"]),
   tool("reorder_scenes", "Réordonne les scènes : fournir TOUS les ids dans le nouvel ordre.", { scene_ids: { type: "array", items: S() } }, ["scene_ids"]),
-  tool("add_shot", "Ajoute un plan à une scène. inSec/outSec = bornes du plan dans la scène.",
+  tool("plan_scene_beats", "Découpe le récit réel d'une scène en phrases illustrables avec minutage. Chaque extrait est une citation EXACTE du texte, jamais des faits inventés. Utilise ces intervalles pour créer plusieurs plans visuellement pertinents.", { scene_id: S() }, ["scene_id"]),
+  tool("add_code_shot", "Ajoute un plan graphique réalisé UNIQUEMENT par code : typographie animée, composition et mise en évidence d'une citation EXACTE du récit. Choisis cette option lorsque la pertinence d'une vidéo/photo n'est pas certaine. Pas de média externe; maximum 12 secondes par plan.",
+    { scene_id:S(), visualText:S("extrait EXACT de la narration, sans paraphrase ni nouveau fait"), cardStyle:E(["focus","question","contrast","process"]), inSec:N(), outSec:N(), position:N() }, ["scene_id","visualText","outSec"]),
+  tool("turn_shot_into_code", "Remplace un plan média douteux par une illustration créée par code à partir d'une citation EXACTE de la scène (le plan doit durer au plus 12s). Conserve les autres plans.",
+    { shot_id:S(), visualText:S(), cardStyle:E(["focus","question","contrast","process"]) }, ["shot_id","visualText"]),
+  tool("verify_shot_media", "OBLIGATOIRE AVANT RENDU pour tout plan utilisant une image/vidéo réelle en création autonome. Examine les images RÉELLES du fichier, compare-les à la citation exacte de la narration, et enregistre une preuve seulement si elles illustrent directement le propos. Retourne un refus si ambigu ou hors sujet : choisir alors turn_shot_into_code.",
+    { shot_id:S(), narrationQuote:S("extrait EXACT du texte narré au moment de ce plan"), visualIntent:S("éléments visuels concrets que ce passage doit montrer, sans généralités") }, ["shot_id","narrationQuote","visualIntent"]),
+  tool("add_shot", "Ajoute un plan à une scène. inSec/outSec = bornes du plan dans la scène. Un plan avec média devra être vérifié par verify_shot_media avant le rendu autonome.",
     { scene_id: S(), camera: CAM, mediaRef: S("id d'un média déjà présent dans le film"), inSec: N(), outSec: N(), sourceInSec: N("début dans la vidéo SOURCE (en secondes), différent de inSec dans la scène"), position: N() }, ["scene_id", "outSec"]),
   tool("update_shot", "Modifie un plan (mediaRef: null pour détacher le média).",
     { shot_id: S(), camera: CAM, mediaRef: { type: ["string", "null"] }, inSec: N(), outSec: N(), sourceInSec: N("temps de début à lire dans le fichier vidéo source") }, ["shot_id"]),
@@ -87,7 +96,7 @@ export const TOOLS: ToolDef[] = [
 
 const FILM_OPS = new Set([
   "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
-  "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "update_shot", "remove_shot",
+  "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "add_code_shot", "turn_shot_into_code", "update_shot", "remove_shot",
   "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_scene_music", "update_subtitles",
 ]);
 
@@ -228,6 +237,18 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const row = await loadWorking(ctx);
         return { output: { version: row.version, rev: row.rev, film: row.data } };
       }
+      case "plan_scene_beats": {
+        const row = await loadWorking(ctx);
+        const scene = (row.data.scenes ?? []).find((s: Json) => s.id === args.scene_id);
+        if (!scene) throw new Error("Scène introuvable.");
+        const text = String(scene.narration?.text || scene.narrativeGoal || "").trim();
+        if (!text) throw new Error("Écris d'abord une narration ou une intention de scène.");
+        const beats = planNarrativeBeats(text, Number(scene.durationSec));
+        return { output: {
+          sceneId:scene.id, originalText:text, totalDurationSec:scene.durationSec, beats,
+          instruction:"Pour chaque phrase, cherche des médias vérifiables OU choisis une illustration typographique créée par code. N'utilise pas un plan générique non examiné."
+        }};
+      }
       case "measure_narration": {
         const row = await loadWorking(ctx);
         return { output: { segments: await measureNarrations(ctx, row.data), tolerance: "écart maximal de 1 seconde ou 10 % de la durée cible" } };
@@ -360,6 +381,109 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           limitation: "Une image toutes les 5 secondes est échantillonnée sur la portion inspectée ; les actions entre deux images ne sont pas garanties.",
         } };
       }
+      case "verify_shot_media": {
+        const working=await loadWorking(ctx);
+        let scene:Json | undefined, shot:Json | undefined;
+        for(const item of working.data.scenes ?? []){
+          const match=(item.shots ?? []).find((p:Json)=>p.id===args.shot_id);
+          if(match){scene=item;shot=match;break;}
+        }
+        if(!scene||!shot||!shot.mediaRef)throw Error("Plan ou média introuvable.");
+        const quote=typeof args.narrationQuote==="string"?args.narrationQuote.trim():"";
+        if(!quotedFromNarration(scene,quote))
+          throw Error("La citation doit être copiée exactement depuis le texte de la scène.");
+        const visualIntent=typeof args.visualIntent==="string"?args.visualIntent.trim().slice(0,350):"";
+        if(visualIntent.length<10)throw Error("Décris les éléments visuels précis que la narration exige.");
+        const row=await loadAsset(ctx,shot.mediaRef);
+        if(!["image","video"].includes(row.kind))throw Error("La vérification visuelle exige une image ou une vidéo.");
+        const provenance=row.provenance??{};
+        const unknownRights= row.source==="search" && (
+          !provenance.license || !provenance.author || !provenance.url ||
+          /inconnue|non renseignée|unknown|no license/i.test(String(provenance.license))
+        );
+        if(unknownRights)throw Error("Droits du média non documentés : remplace-le par une illustration par code.");
+        const instruction =
+          "Tu es contrôleur audiovisuel EXTRÊMEMENT STRICT. Observe UNIQUEMENT l'image réellement fournie. " +
+          "Citation du scénario : " + JSON.stringify(quote) + ". " +
+          "Intention visuelle demandée : " + JSON.stringify(visualIntent) + ". " +
+          "La pertinence mesure ce que l'image ILLUSTRE DIRECTEMENT de la CITATION, pas la similitude de mots-clés, " +
+          "ni une association vaguement possible au thème. Si la scène mentionne une action ou un objet absent de l'image, " +
+          "donne un score bas. Une image isolée ne prouve aucun mouvement. " +
+          "Retourne UNIQUEMENT JSON : " +
+          '{"description":"description concrète des éléments visibles","relevance":0.0,"visualQuality":0.0,"hasContradiction":false}. ' +
+          "relevance et visualQuality doivent être des nombres entre 0 et 1. " +
+          "hasContradiction=true si l'image pourrait induire le public en erreur quant à la citation. " +
+          "N'invente ni personne, ni événement, ni texte visible.";
+        const review=async(imageUrl:string,atSec?:number):Promise<Json>=>{
+          const v=await describeImage(ctx.cfg,imageUrl,instruction);
+          ctx.usage.input+=v.usage.input;ctx.usage.output+=v.usage.output;
+          const j=parseJsonLoose(v.text);
+          if(typeof j.description!=="string"||!j.description.trim()||
+             typeof j.relevance!=="number"||!Number.isFinite(j.relevance)||
+             typeof j.visualQuality!=="number"||!Number.isFinite(j.visualQuality)||
+             typeof j.hasContradiction!=="boolean")
+            throw Error("Vision indisponible ou réponse incomplète : plan non vérifié.");
+          return {
+            description:j.description.slice(0,500),
+            relevance:j.relevance,visualQuality:j.visualQuality,
+            hasContradiction:j.hasContradiction,
+            ...(atSec===undefined?{}:{atSec}),
+          };
+        };
+        let samples:Json[]=[];
+        const sourceInSec=Number(shot.sourceInSec??0);
+        if(row.kind==="image"){
+          let imageUrl:string|null=null;
+          if(row.source==="upload"){
+            const storagePath=String(row.storage_path??"");
+            if(storagePath.split("/")[0]!==ctx.userId)throw Error("Chemin d'image privé invalide.");
+            const {data}=await ctx.admin.storage.from("user-uploads").createSignedUrl(storagePath,600);
+            imageUrl=data?.signedUrl??null;
+          }else imageUrl=provenance.download_url??provenance.preview_url??null;
+          if(!imageUrl)throw Error("Image non accessible pour contrôle visuel.");
+          samples=[await review(imageUrl)];
+        }else{
+          const duration=Number(shot.outSec)-Number(shot.inSec??0);
+          if(!Number.isFinite(sourceInSec)||sourceInSec<0||!Number.isFinite(duration)||
+             duration<1||duration>16)
+            throw Error("Un extrait vidéo vérifiable doit durer de 1 à 16 secondes.");
+          const engine=(Deno.env.get("RENDER_ENGINE_URL")??"https://galingtosh-engine.onrender.com").replace(/\/$/,"");
+          const response=await fetch(engine+"/media/evidence-frames",{
+            method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ctx.authToken,
+              ...(ctx.productionMissionId?{"X-Production-Mission":ctx.productionMissionId}:{})},
+            body:JSON.stringify({project_id:ctx.projectId,user_id:ctx.userId,media_id:row.id,
+              source_in_sec:sourceInSec,duration_sec:duration}),
+            signal:AbortSignal.timeout(115000),
+          });
+          if(!response.ok)throw Error("Impossible de prélever les images réelles de la vidéo : utiliser une carte créée par code.");
+          const parsed=await response.json();
+          const frames=parsed.frames??[];
+          if(parsed.analysisLevel!=="three_actual_video_frames"||!Array.isArray(frames)||frames.length!==3)
+            throw Error("Les trois images de contrôle n'ont pas été obtenues.");
+          for(const frame of frames){
+            if(typeof frame.jpegBase64!=="string"||frame.jpegBase64.length>150000||!Number.isFinite(frame.atSec))
+              throw Error("Image du passage vidéo invalide.");
+            samples.push(await review("data:image/jpeg;base64,"+frame.jpegBase64,Number(frame.atSec)));
+          }
+        }
+        if(samples.some(v=>v.relevance<MIN_RELEVANCE||v.visualQuality<MIN_VISUAL_QUALITY||
+          v.relevance>1||v.visualQuality>1||v.hasContradiction)){
+          return {output:{verified:false,shot_id:shot.id,
+            reason:"Le passage ne montre pas de manière suffisamment intuitive et fiable ce que dit la narration.",
+            reviews:samples.map(v=>({description:v.description,relevance:v.relevance,quality:v.visualQuality})),
+            fallback:"turn_shot_into_code"},isError:true};
+        }
+        const evidence={
+          verifiedBy:"vision_observation_v1",actualVisualAnalysis:true,
+          mediaRef:row.id,narrationQuote:quote,visualIntent,hasContradiction:false,
+          licenseChecked:row.source==="upload"||!unknownRights,
+          sourceInSec, samples,
+        };
+        const saved=await mutateFilm(ctx,"record_visual_verification",{shot_id:shot.id,evidence});
+        return {output:{...saved,verified:true,shot_id:shot.id,
+          evidenceLevel:row.kind==="video"?"three_reviewed_real_frames":"reviewed_real_image",
+          inspectedFrameCount:samples.length,minimumRelevance:Math.min(...samples.map(v=>v.relevance))}};
+      }
       case "analyze_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
         if (row.kind !== "image") throw new Error("L'analyse par vision ne concerne que les images.");
@@ -388,6 +512,10 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const row = await loadWorking(ctx);
         const hasShots = (row.data.scenes ?? []).some((s: Json) => (s.shots ?? []).length > 0);
         if (!hasShots) throw new Error("Le film ne contient aucun plan : rien à rendre.");
+        if (ctx.productionMissionId || row.data.info?.visualPolicy === "strict") {
+          const issues=narrativePreflight(row.data);
+          if(issues.length)throw Error("Les images doivent illustrer la narration : "+issues.slice(0,4).join(" "));
+        }
         const measured = await measureNarrations(ctx, row.data);
         const mismatches = narrationMismatches(measured);
         if (mismatches.length) {
