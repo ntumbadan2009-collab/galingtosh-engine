@@ -252,6 +252,17 @@ class TaskManager:
                 "finished_at": datetime.now(timezone.utc).isoformat(),
             })
             self.current["step"] = "terminé"
+            # Sending must never turn a completed render into a failed render.
+            if self.settings.email_notifications_enabled:
+                try:
+                    await notify_render_ready(
+                        self.db, job,
+                        str((film.get("info") or {}).get("title") or "Votre vidéo"),
+                        api_key=self.settings.resend_api_key,
+                        from_address=self.settings.email_from,
+                    )
+                except Exception:
+                    logger.exception("Notification email non envoyée pour le rendu %s.", job_id)
         except asyncio.CancelledError:
             with contextlib.suppress(Exception):
                 job = await self.db.get_render_job(job_id)
