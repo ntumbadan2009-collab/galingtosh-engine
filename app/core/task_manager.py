@@ -19,6 +19,7 @@ from app.media.subtitles import write_srt
 from app.media.tts import synthesize_scene_narrations, synthesize_tts_tracks
 from app.media.procedural import synthesize_effect
 from app.storage.supabase import SupabaseREST, SupabaseError
+from app.notifications.resend import notify_render_ready
 
 logger = logging.getLogger("galingtosh.worker")
 
