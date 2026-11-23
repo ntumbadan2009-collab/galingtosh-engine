@@ -48,6 +48,7 @@ class SceneCheckpoints:
 
     async def restore(self, index: int, signature: str, work: Path) -> list[dict] | None:
         prefix = self.prefix(index, signature)
+        downloaded: list[Path] = []
         try:
             manifest_bytes = await self.db.download_storage_bytes(self.bucket, prefix + "/manifest.json", max_bytes=64 * 1024)
             manifest = json.loads(manifest_bytes)
@@ -69,6 +70,7 @@ class SceneCheckpoints:
                         not isinstance(checksum, str) or len(checksum) != 64):
                     return None
                 target = work / name
+                downloaded.append(target)
                 await self.db.download_storage_file(self.bucket, prefix + "/" + name, target, max_bytes=size)
                 if target.stat().st_size != size or sha256_file(target) != checksum:
                     raise ValueError("Checkpoint integrity mismatch")
@@ -77,11 +79,9 @@ class SceneCheckpoints:
             return entries
         except Exception as exc:
             logger.warning("scene checkpoint unavailable index=%s: %s", index, type(exc).__name__)
-            # Remove only files owned by this failed scene, so re-encoding can
-            # safely overwrite the same filenames.
-            for file in work.glob("segment_*.mp4"):
-                if file.is_file() and file.name in locals().get("manifest", {}).get("segments", []):
-                    file.unlink(missing_ok=True)
+            # A partial restore must not leave corrupt scene files behind.
+            for file in downloaded:
+                file.unlink(missing_ok=True)
             return None
 
     async def save(self, index: int, signature: str, entries: list[dict], work: Path) -> bool:
