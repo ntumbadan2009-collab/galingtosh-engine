@@ -7,5 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m piper.download_voices --data-dir /opt/piper fr_FR-siwis-medium
 ENV PIPER_VOICE_PATH=/opt/piper/fr_FR-siwis-medium.onnx
 COPY app ./app
+COPY tests ./tests
+RUN python -m compileall -q app && python -m pytest -q tests/test_checkpoints.py
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
