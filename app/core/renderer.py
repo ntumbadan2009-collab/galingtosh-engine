@@ -114,18 +114,6 @@ class FilmRenderer:
             for scene_index, scene in enumerate(scenes):
                 _memory(f"scene_{scene_index+1}_start")
                 scene_signature = fingerprint({"render": render_signature, "scene": scene_index})
-                if checkpoints is not None:
-                    previous = await checkpoints.restore(scene_index, scene_signature, work)
-                    if previous:
-                        for part in previous:
-                            segments.append(work / part["name"])
-                            segment_shot_ids.append(part.get("shot_id"))
-                            segment_durations.append(float(part["duration"]))
-                        completed_shots += len(scene.get("shots", []))
-                        if progress_callback:
-                            await progress_callback(min(78, 18 + int(60 * completed_shots / total_shots)),
-                                                    f"scène {scene_index + 1} restaurée")
-                        continue
                 scene_duration = float(scene.get("durationSec", 0))
                 shots = sorted(scene.get("shots", []), key=lambda x: x.get("order", 0))
                 # Some agent plans express each shot's intended length in
@@ -139,6 +127,18 @@ class FilmRenderer:
                         shot["inSec"] = round(cursor_for_shots, 3)
                         shot["outSec"] = round(min(scene_duration, cursor_for_shots + intended), 3)
                         cursor_for_shots = float(shot["outSec"])
+                if checkpoints is not None:
+                    previous = await checkpoints.restore(scene_index, scene_signature, work)
+                    if previous:
+                        for part in previous:
+                            segments.append(work / part["name"])
+                            segment_shot_ids.append(part.get("shot_id"))
+                            segment_durations.append(float(part["duration"]))
+                        completed_shots += len(scene.get("shots", []))
+                        if progress_callback:
+                            await progress_callback(min(78, 18 + int(60 * completed_shots / total_shots)),
+                                                    f"scène {scene_index + 1} restaurée")
+                        continue
                 cursor = 0.0
                 scene_segment_start = len(segments)
                 for shot_index, shot in enumerate(shots):
