@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from app.core.validator import validate_film
+from app.core.narrative_policy import narrative_issues
+from app.media.narrative_cards import render_code_card
 from app.media.ffmpeg import FFmpegError, probe_media, run_ffmpeg
 from app.media.images import normalize_image
 from app.media.video import normalize_video
@@ -88,6 +90,10 @@ class FilmRenderer:
 
     async def render(self, film: dict[str, Any], media_files: dict[str, Path], output: Path, progress_callback: Callable[[int, str], Awaitable[None]] | None = None, checkpoints: SceneCheckpoints | None = None) -> dict[str, Any]:
         report = validate_film(film)
+        if (film.get("info") or {}).get("visualPolicy") == "strict":
+            issues = narrative_issues(film)
+            if issues:
+                raise RenderError("Montage non conforme aux preuves visuelles : " + " ".join(issues[:5]))
         if not report["valid"]:
             raise RenderError("Film JSON invalide : " + " ".join(report["errors"][:4]))
         scenes = sorted(film.get("scenes", []), key=lambda x: x.get("order", 0))
@@ -174,7 +180,19 @@ class FilmRenderer:
                     if media and media.get("kind") == "model3d":
                         warnings.append("Média 3D ignoré : format non pris en charge."); source = None
                     segment = work / f"segment_{len(segments):04d}.mp4"
-                    if not source or not source.is_file():
+                    if shot.get("visualMode") == "programmatic":
+                        card = work / f"narrative_card_{scene_index:03d}_{shot_index:03d}.png"
+                        render_code_card(
+                            card, narration_quote=str(shot["visualText"]),
+                            scene_title=str(scene.get("title") or ""),
+                            scene_number=scene_index + 1,
+                            width=width, height=height,
+                            style=str(shot.get("cardStyle") or "focus"),
+                        )
+                        camera = ((shot.get("camera") or {}).get("type") or "ken_burns")
+                        await normalize_image(card, segment, width, height, fps, duration,
+                                              "ken_burns" if camera == "none" else camera)
+                    elif not source or not source.is_file():
                         warnings.append(f"Plan {shot.get('id', shot_index+1)} : média absent, fond noir utilisé.")
                         await self._black(segment, width, height, fps, duration)
                     else:
