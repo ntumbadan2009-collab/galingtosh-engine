@@ -162,6 +162,64 @@ class SupabaseREST:
         if response.status_code >= 400:
             raise SupabaseError("Envoi du fichier rendu impossible.")
 
+    @staticmethod
+    def _storage_path(bucket: str, object_path: str) -> str:
+        if bucket not in ALLOWED_UPLOAD_BUCKETS:
+            raise SupabaseError("Bucket de stockage interdit.")
+        clean = object_path.replace("\\\\", "/")
+        if (clean.startswith("/") or "\\x00" in clean or
+                any(p in {"", ".", ".."} for p in clean.split("/"))):
+            raise SupabaseError("Chemin de stockage invalide.")
+        return clean
+
+    async def upload_storage_bytes(self, bucket: str, object_path: str,
+                                   payload: bytes, content_type: str) -> None:
+        clean = self._storage_path(bucket, object_path)
+        if len(payload) > 128 * 1024:
+            raise SupabaseError("Manifeste de sauvegarde trop volumineux.")
+        url = f"{self.base}/storage/v1/object/{bucket}/{quote(clean, safe='/')}"
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
+            response = await client.post(url, headers={**self._headers(),
+                "x-upsert": "true", "Content-Type": content_type}, content=payload)
+        if response.status_code >= 400:
+            raise SupabaseError("Impossible de sauvegarder le manifeste.", response.status_code)
+
+    async def download_storage_file(self, bucket: str, object_path: str,
+                                    destination: Path, max_bytes: int = 49 * 1024 * 1024) -> None:
+        clean = self._storage_path(bucket, object_path)
+        url = f"{self.base}/storage/v1/object/{bucket}/{quote(clean, safe='/')}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        partial = destination.with_name(destination.name + ".partial")
+        count = 0
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
+                async with client.stream("GET", url, headers=self._headers()) as response:
+                    if response.status_code >= 400:
+                        raise SupabaseError("Checkpoint non disponible.", response.status_code)
+                    with partial.open("wb") as output:
+                        async for chunk in response.aiter_bytes(64 * 1024):
+                            count += len(chunk)
+                            if count > max_bytes:
+                                raise SupabaseError("Fichier de checkpoint trop volumineux.")
+                            output.write(chunk)
+            partial.replace(destination)
+        finally:
+            partial.unlink(missing_ok=True)
+
+    async def download_storage_bytes(self, bucket: str, object_path: str, max_bytes: int = 65536) -> bytes:
+        clean = self._storage_path(bucket, object_path)
+        url = f"{self.base}/storage/v1/object/{bucket}/{quote(clean, safe='/')}"
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
+            async with client.stream("GET", url, headers=self._headers()) as response:
+                if response.status_code >= 400:
+                    raise SupabaseError("Manifeste non disponible.", response.status_code)
+                result = bytearray()
+                async for chunk in response.aiter_bytes(16 * 1024):
+                    result.extend(chunk)
+                    if len(result) > max_bytes:
+                        raise SupabaseError("Manifeste trop volumineux.")
+                return bytes(result)
+
     async def download_user_upload(self, storage_path: str, user_id: str, destination: Path,
                                    max_bytes: int = 200 * 1024 * 1024) -> tuple[int, str]:
         safe_path = validate_upload_path(storage_path, user_id)
