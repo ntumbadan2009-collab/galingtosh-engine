@@ -9,3 +9,4 @@ aiohttp>=3.10,<4
 cairosvg>=2.7,<3
 edge-tts>=7,<8
 piper-tts>=1.8,<2
+Pillow>=10.4,<12
