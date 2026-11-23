@@ -100,7 +100,7 @@ def test_programmatic_card_is_readable_and_never_uses_external_images(tmp_path):
                      width=1280, height=720, style="question")
     with Image.open(png) as im:
         assert im.size == (1280, 720)
-        assert im.getpixel((50, 50)) != im.getpixel((120, 620))
+        assert im.getpixel((50, 50)) != im.getpixel((100, 120))  # deterministic accent stripe
 
 
 @pytest.mark.asyncio
