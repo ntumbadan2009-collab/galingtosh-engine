@@ -95,7 +95,7 @@ def narrative_issues(film: dict) -> list[str]:
         if not isinstance(scene, dict):
             problems.append(f"Scène {si+1} invalide.")
             continue
-        narration = (scene.get("narration") or {}).get("text", "")
+        narration = (scene.get("narration") or {}).get("text") or scene.get("narrativeGoal", "")
         shots = scene.get("shots") or []
         if not shots:
             problems.append(f"Scène {si+1} sans plans illustrés.")
