@@ -193,6 +193,11 @@ class FilmRenderer:
                         await normalize_image(card, segment, width, height, fps, duration,
                                               "ken_burns" if camera == "none" else camera)
                     elif not source or not source.is_file():
+                        if (film.get("info") or {}).get("visualPolicy") == "strict":
+                            raise RenderError(
+                                f"Média visuel du plan {scene_index+1}.{shot_index+1} devenu "
+                                "indisponible : refus d'insérer un fond noir qui tromperait la narration."
+                            )
                         warnings.append(f"Plan {shot.get('id', shot_index+1)} : média absent, fond noir utilisé.")
                         await self._black(segment, width, height, fps, duration)
                     else:
