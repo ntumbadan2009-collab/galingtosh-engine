@@ -1,7 +1,7 @@
 // Structure FILM JSON + opérations contrôlées (fonctions pures).
 // L'agent ne modifie jamais le JSON autrement que par applyOperation().
 
-import { quotedFromNarration, verifiedVisualEvidence } from "./narrative.ts";
+import { quotedFromNarration, verifiedVisualEvidence, motionSpecIssues, MOTION_TYPES } from "./narrative.ts";
 export type Json = Record<string, any>;
 
 export const ASPECTS: Record<string, [number, number]> = {
@@ -281,6 +281,19 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       renum(f.scenes);
       break;
     }
+    case "set_motion_visual": {
+      const {scene,shot}=findShot(f,req(a,"shot_id"));
+      if(shot.visualMode!=="programmatic"||shot.mediaRef)
+        fail("Une animation graphique ne peut être ajoutée qu'à un plan généré par code.");
+      const kind=oneOf(a.visualType,"visualType",[...MOTION_TYPES]);
+      if(!Array.isArray(a.visualItems))fail("visualItems doit être un tableau de citations exactes.");
+      const spec={type:kind,items:a.visualItems.map((text:unknown)=>({text}))};
+      const issues=motionSpecIssues(scene,{...shot,visualSpec:spec});
+      if(issues.length)fail(issues.join(" "));
+      shot.visualSpec=spec;
+      result={shot_id:shot.id,visualType:kind,items:spec.items.length};
+      break;
+    }
     case "add_code_shot": {
       const scene = findScene(f, req(a, "scene_id"));
       const quote = str(a.visualText, "visualText", 280);
@@ -294,9 +307,17 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         camera: {type:"ken_burns"}, visualMode:"programmatic",
         visualText:quote, cardStyle,
       };
+      if(a.visualType!==undefined){
+        const kind=oneOf(a.visualType,"visualType",[...MOTION_TYPES]);
+        if(!Array.isArray(a.visualItems))fail("visualItems manquant pour l'animation.");
+        const spec={type:kind,items:a.visualItems.map((text:unknown)=>({text}))};
+        const issues=motionSpecIssues(scene,{...sh,visualSpec:spec});
+        if(issues.length)fail(issues.join(" "));
+        sh.visualSpec=spec;
+      }
       insertAt(scene.shots, sh, a.position);
       renum(scene.shots);
-      result = {shot_id:sh.id, scene_id:scene.id, created_programmatically:true, visualText:quote};
+      result = {shot_id:sh.id, scene_id:scene.id, created_programmatically:true, visualType:sh.visualSpec?.type??"legacy", visualText:quote};
       break;
     }
     case "turn_shot_into_code": {
@@ -309,8 +330,16 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       shot.visualText = quote;
       shot.cardStyle = a.cardStyle === undefined ? "focus" : oneOf(a.cardStyle, "cardStyle", ["focus","question","contrast","process"]);
       shot.camera = {type:"ken_burns"};
-      delete shot.mediaRef; delete shot.visualEvidence; delete shot.sourceInSec;
-      result = {shot_id:shot.id, scene_id:scene.id, converted_to_code:true};
+      delete shot.mediaRef; delete shot.visualEvidence; delete shot.sourceInSec; delete shot.visualSpec;
+      if(a.visualType!==undefined){
+        const kind=oneOf(a.visualType,"visualType",[...MOTION_TYPES]);
+        if(!Array.isArray(a.visualItems))fail("visualItems manquant pour l'animation.");
+        const spec={type:kind,items:a.visualItems.map((text:unknown)=>({text}))};
+        const issues=motionSpecIssues(scene,{...shot,visualSpec:spec});
+        if(issues.length)fail(issues.join(" "));
+        shot.visualSpec=spec;
+      }
+      result = {shot_id:shot.id, scene_id:scene.id, converted_to_code:true,visualType:shot.visualSpec?.type??"legacy"};
       break;
     }
     case "record_visual_verification": {
@@ -352,7 +381,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       if (shot.outSec <= shot.inSec) fail("outSec doit être supérieur à inSec");
       if (a.mediaRef !== undefined) {
         if (a.mediaRef === null) delete shot.mediaRef; else { mediaIn(f, a.mediaRef); shot.mediaRef = a.mediaRef; }
-        if (a.mediaRef) {shot.visualMode="media";delete shot.visualText;delete shot.cardStyle;}
+        if (a.mediaRef) {shot.visualMode="media";delete shot.visualText;delete shot.cardStyle;delete shot.visualSpec;}
       }
       if (shot.outSec > scene.durationSec) warnings.push(`Le plan dépasse la durée de la scène (${shot.outSec}s > ${scene.durationSec}s).`);
       break;
@@ -374,7 +403,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       upsertMedia(f, a.media);
       shot.mediaRef = a.media.id;
       shot.visualMode="media";
-      delete shot.visualEvidence; delete shot.visualText; delete shot.cardStyle;
+      delete shot.visualEvidence; delete shot.visualText; delete shot.cardStyle; delete shot.visualSpec;
       result = { shot_id: shot.id, media_id: a.media.id };
       break;
     }
@@ -498,7 +527,7 @@ export function summarizeFilm(f: Json): string {
     const words = String(s.narration?.text || s.narrativeGoal || "");
     const shotDescriptions = (s.shots ?? []).slice(0,50).map((p:Json) => {
       const type = p.visualMode === "programmatic" ?
-        `code: "${String(p.visualText??"").slice(0,95)}"` :
+        `code[${p.visualSpec?.type??"texte"}]: "${String(p.visualText??"").slice(0,95)}"` :
         `média=${p.mediaRef??"AUCUN"} (vision ${p.visualEvidence?.verifiedBy==="vision_observation_v1"?"contrôlée":"NON CONTRÔLÉE"})`;
       return `    [${p.id}] ${p.inSec}-${p.outSec}s ${type}`;
     });

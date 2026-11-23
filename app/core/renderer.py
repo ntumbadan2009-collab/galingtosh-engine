@@ -11,6 +11,7 @@ from typing import Any, Callable, Awaitable
 from app.core.validator import validate_film
 from app.core.narrative_policy import narrative_issues
 from app.media.narrative_cards import render_code_card
+from app.media.motion_graphics import render_motion_graphic
 from app.media.ffmpeg import FFmpegError, probe_media, run_ffmpeg
 from app.media.images import normalize_image
 from app.media.video import normalize_video
@@ -181,17 +182,29 @@ class FilmRenderer:
                         warnings.append("Média 3D ignoré : format non pris en charge."); source = None
                     segment = work / f"segment_{len(segments):04d}.mp4"
                     if shot.get("visualMode") == "programmatic":
-                        card = work / f"narrative_card_{scene_index:03d}_{shot_index:03d}.png"
-                        render_code_card(
-                            card, narration_quote=str(shot["visualText"]),
-                            scene_title=str(scene.get("title") or ""),
-                            scene_number=scene_index + 1,
-                            width=width, height=height,
-                            style=str(shot.get("cardStyle") or "focus"),
-                        )
-                        camera = ((shot.get("camera") or {}).get("type") or "ken_burns")
-                        await normalize_image(card, segment, width, height, fps, duration,
-                                              "ken_burns" if camera == "none" else camera)
+                        if shot.get("visualSpec"):
+                            # Level 2: drawings are generated from narrated,
+                            # audited fragments; no external images/videos.
+                            await render_motion_graphic(
+                                segment, spec=shot["visualSpec"],
+                                scene_title=str(scene.get("title") or ""),
+                                scene_number=scene_index + 1,
+                                width=width, height=height, fps=fps,
+                                duration=duration, workdir=work,
+                            )
+                        else:
+                            # V1 legacy remains stable for existing projects.
+                            card = work / f"narrative_card_{scene_index:03d}_{shot_index:03d}.png"
+                            render_code_card(
+                                card, narration_quote=str(shot["visualText"]),
+                                scene_title=str(scene.get("title") or ""),
+                                scene_number=scene_index + 1,
+                                width=width, height=height,
+                                style=str(shot.get("cardStyle") or "focus"),
+                            )
+                            camera = ((shot.get("camera") or {}).get("type") or "ken_burns")
+                            await normalize_image(card, segment, width, height, fps, duration,
+                                                  "ken_burns" if camera == "none" else camera)
                     elif not source or not source.is_file():
                         if (film.get("info") or {}).get("visualPolicy") == "strict":
                             raise RenderError(

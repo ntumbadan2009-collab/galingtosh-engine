@@ -77,6 +77,7 @@ export function narrativePreflight(film: any): string[] {
           problems.push(prefix+" : carte programmée sans citation fidèle du récit.");
         if (duration > MAX_CODE_SECONDS)
           problems.push(prefix+" : carte programmée trop longue (12 s maximum).");
+        for (const issue of motionSpecIssues(scene,shot)) problems.push(prefix+" : "+issue);
       } else {
         if (!verifiedVisualEvidence(scene, shot, assets.get(shot.mediaRef)))
           problems.push(prefix+" : pertinence du média non vérifiée sur ses images réelles. Utilise verify_shot_media ou turn_shot_into_code.");
@@ -86,6 +87,47 @@ export function narrativePreflight(film: any): string[] {
     }
   }
   return problems;
+}
+
+export const MOTION_TYPES = ["focus", "steps", "timeline", "comparison"] as const;
+
+const TEMPORAL = /(?:puis|ensuite|après|avant|d'abord|premièrement|secondement|troisièmement|initialement|finalement|au début|à la fin|then|before|after|first|next|finally)|\b(?:19|20)\d{2}\b/iu;
+const CONTRAST = /(?:mais|cependant|pourtant|tandis que|alors que|contrairement|différent|différence|par contre|en revanche|but|while|unlike|versus)/iu;
+
+/** Level-2 diagrams contain only ordered, literal excerpts already spoken. */
+export function motionSpecIssues(scene: any, shot: any): string[] {
+  const spec = shot?.visualSpec;
+  if (spec == null) return [];
+  if (typeof spec !== "object" || Array.isArray(spec) ||
+      Object.keys(spec).sort().join(",") !== "items,type")
+    return ["La spécification doit contenir uniquement type et items."];
+  const kind = spec.type, items = spec.items;
+  if (!MOTION_TYPES.includes(kind) || !Array.isArray(items))
+    return ["Type de schéma ou éléments invalides."];
+  const count = items.length;
+  if (kind === "focus" && count !== 1 ||
+      kind === "comparison" && count !== 2 ||
+      ["steps", "timeline"].includes(kind) && (count < 2 || count > 4))
+    return ["Nombre d'éléments non pris en charge pour ce schéma."];
+  const quote = clean(shot?.visualText), narrative = clean(narrativeSource(scene));
+  if (!quote || !narrative.includes(quote))
+    return ["Le schéma ne reprend pas la narration de la scène."];
+  if (kind === "timeline" && !TEMPORAL.test(quote))
+    return ["Une chronologie exige une suite temporelle explicite."];
+  if (kind === "comparison" && !CONTRAST.test(quote))
+    return ["Une comparaison exige un contraste explicite dans le récit."];
+  let cursor=0;
+  for (let i=0;i<count;i++) {
+    const item=items[i];
+    if (!item || typeof item !== "object" || Array.isArray(item) ||
+        Object.keys(item).join(",")!=="text") return [`Bloc ${i+1} invalide.`];
+    const text=clean(item.text);
+    if (text.length < 5 || text.length > 125) return [`Bloc ${i+1} : citation trop courte ou trop longue.`];
+    const position=quote.indexOf(text,cursor);
+    if (position<0) return [`Bloc ${i+1} : élément absent ou hors ordre de la narration.`];
+    cursor=position+text.length;
+  }
+  return [];
 }
 
 export interface NarrativeBeat {
