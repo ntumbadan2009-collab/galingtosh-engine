@@ -13,6 +13,7 @@ from typing import Any
 
 from app.config import Settings
 from app.core.renderer import FilmRenderer, RenderError, _rss_mb
+from app.core.checkpoints import SceneCheckpoints
 from app.core.narration import align_scene_narrations
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
@@ -83,7 +84,7 @@ class TaskManager:
 
     async def _render_with_heartbeat(
         self, job_id: str, renderer: FilmRenderer, film: dict,
-        media_files: dict[str, Path], output: Path,
+        media_files: dict[str, Path], output: Path, checkpoints: SceneCheckpoints,
     ) -> dict[str, Any] | None:
         last_progress = 15
         async def on_progress(value: int, stage: str) -> None:
@@ -93,7 +94,7 @@ class TaskManager:
                 await self._patch(job_id, {"progress": value, "updated_at": datetime.now(timezone.utc).isoformat()})
                 last_progress = value
             logger.info("Render job=%s stage=%s progress=%s rss_tree_mb=%s", job_id, stage, value, _rss_mb())
-        return await renderer.render(film, media_files, output, on_progress)
+        return await renderer.render(film, media_files, output, on_progress, checkpoints=checkpoints)
 
     async def _patch(self, job_id: str, fields: dict) -> None:
         fields = {**fields, "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -201,8 +202,13 @@ class TaskManager:
                 max_seconds=self.settings.max_render_seconds,
                 max_output_mb=self.settings.max_output_mb,
             )
+            # Durable artifacts are scoped to the authenticated job owner,
+            # project and job ID. They survive worker restarts and /tmp loss.
+            checkpoints = SceneCheckpoints(
+                self.db, str(job["user_id"]), str(job["project_id"]), job_id
+            )
             result = await self._render_with_heartbeat(
-                job_id, renderer, film, media_files, output
+                job_id, renderer, film, media_files, output, checkpoints
             )
             if result is None or await self._is_canceled(job_id):
                 return
