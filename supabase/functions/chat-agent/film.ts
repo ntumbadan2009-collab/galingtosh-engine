@@ -1,6 +1,7 @@
 // Structure FILM JSON + opérations contrôlées (fonctions pures).
 // L'agent ne modifie jamais le JSON autrement que par applyOperation().
 
+import { quotedFromNarration, verifiedVisualEvidence } from "./narrative.ts";
 export type Json = Record<string, any>;
 
 export const ASPECTS: Record<string, [number, number]> = {
@@ -44,7 +45,7 @@ function str(v: any, k: string, max = 2000): string {
 export function defaultFilm(title: string, type = "custom", language = "fr"): Json {
   const [width, height] = ASPECTS["16:9"];
   return {
-    info: { title, type, language },
+    info: { title, type, language, visualPolicy: "strict" },
     format: { aspect: "16:9", width, height, fps: 30 },
     scenes: [], characters: [], media: [], audio: { tracks: [] },
     effects: [], transitions: [], subtitles: [],
@@ -280,6 +281,52 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       renum(f.scenes);
       break;
     }
+    case "add_code_shot": {
+      const scene = findScene(f, req(a, "scene_id"));
+      const quote = str(a.visualText, "visualText", 280);
+      if (!quotedFromNarration(scene, quote)) fail("L'illustration par code doit citer exactement un passage du récit de cette scène.");
+      const inSec = numIn(a.inSec ?? 0, "inSec", 0, 3600);
+      const outSec = numIn(req(a, "outSec"), "outSec", 0.1, 3600);
+      if (outSec <= inSec || outSec-inSec > 12.0) fail("Un plan programmatique doit durer au maximum 12 secondes.");
+      const cardStyle = a.cardStyle === undefined ? "focus" : oneOf(a.cardStyle, "cardStyle", ["focus","question","contrast","process"]);
+      const sh: Json = {
+        id: nid("sh"), order: 0, inSec, outSec,
+        camera: {type:"ken_burns"}, visualMode:"programmatic",
+        visualText:quote, cardStyle,
+      };
+      insertAt(scene.shots, sh, a.position);
+      renum(scene.shots);
+      result = {shot_id:sh.id, scene_id:scene.id, created_programmatically:true, visualText:quote};
+      break;
+    }
+    case "turn_shot_into_code": {
+      const { scene, shot } = findShot(f, req(a, "shot_id"));
+      const quote = str(a.visualText, "visualText", 280);
+      if (!quotedFromNarration(scene, quote)) fail("Le texte de la carte doit provenir exactement de la narration.");
+      if (Number(shot.outSec)-Number(shot.inSec) > 12.0)
+        fail("Découpe ce plan en morceaux de 12 secondes maximum avant de convertir en illustration par code.");
+      shot.visualMode = "programmatic";
+      shot.visualText = quote;
+      shot.cardStyle = a.cardStyle === undefined ? "focus" : oneOf(a.cardStyle, "cardStyle", ["focus","question","contrast","process"]);
+      shot.camera = {type:"ken_burns"};
+      delete shot.mediaRef; delete shot.visualEvidence; delete shot.sourceInSec;
+      result = {shot_id:shot.id, scene_id:scene.id, converted_to_code:true};
+      break;
+    }
+    case "record_visual_verification": {
+      const { scene, shot } = findShot(f, req(a, "shot_id"));
+      const media = f.media.find((m:Json)=>m.id===shot.mediaRef);
+      // Only the internal vision tool can call this operation; the schema
+      // still validates every sample, source timestamp, quote and media ref.
+      const candidate = {...shot, visualEvidence:a.evidence};
+      if (!verifiedVisualEvidence(scene,candidate,media??null))
+        fail("Preuve de pertinence visuelle invalide.");
+      shot.visualEvidence = a.evidence;
+      shot.visualMode = "media";
+      delete shot.visualText; delete shot.cardStyle;
+      result = {shot_id:shot.id, visual_verified:true};
+      break;
+    }
     case "add_shot": {
       const s = findScene(f, req(a, "scene_id"));
       const inSec = numIn(a.inSec ?? 0, "inSec", 0, 3600);
@@ -297,12 +344,15 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
     case "update_shot": {
       const { scene, shot } = findShot(f, req(a, "shot_id"));
       if (a.camera !== undefined) shot.camera = camera(a.camera, warnings);
+      if (a.mediaRef !== undefined || a.inSec !== undefined ||
+          a.outSec !== undefined || a.sourceInSec !== undefined) delete shot.visualEvidence;
       if (a.inSec !== undefined) shot.inSec = numIn(a.inSec, "inSec", 0, 3600);
       if (a.outSec !== undefined) shot.outSec = numIn(a.outSec, "outSec", 0.1, 3600);
       if (a.sourceInSec !== undefined) shot.sourceInSec = numIn(a.sourceInSec, "sourceInSec", 0, 36000);
       if (shot.outSec <= shot.inSec) fail("outSec doit être supérieur à inSec");
       if (a.mediaRef !== undefined) {
         if (a.mediaRef === null) delete shot.mediaRef; else { mediaIn(f, a.mediaRef); shot.mediaRef = a.mediaRef; }
+        if (a.mediaRef) {shot.visualMode="media";delete shot.visualText;delete shot.cardStyle;}
       }
       if (shot.outSec > scene.durationSec) warnings.push(`Le plan dépasse la durée de la scène (${shot.outSec}s > ${scene.durationSec}s).`);
       break;
@@ -323,6 +373,8 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const { shot } = findShot(f, req(a, "shot_id"));
       upsertMedia(f, a.media);
       shot.mediaRef = a.media.id;
+      shot.visualMode="media";
+      delete shot.visualEvidence; delete shot.visualText; delete shot.cardStyle;
       result = { shot_id: shot.id, media_id: a.media.id };
       break;
     }
@@ -440,11 +492,23 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
 }
 
 export function summarizeFilm(f: Json): string {
-  const scenes = (f.scenes ?? []).map((s: Json) =>
-    `  ${s.order}. [${s.id}] ${s.title} — ${s.durationSec}s, ${s.shots?.length ?? 0} plan(s)${s.mood ? `, ${s.mood}` : ""}`);
+  // The autonomous director MUST see what each shot illustrates. A summary
+  // containing only scene counts causes arbitrary stock-media assignments.
+  const scenes = (f.scenes ?? []).map((s: Json) => {
+    const words = String(s.narration?.text || s.narrativeGoal || "");
+    const shotDescriptions = (s.shots ?? []).slice(0,50).map((p:Json) => {
+      const type = p.visualMode === "programmatic" ?
+        `code: "${String(p.visualText??"").slice(0,95)}"` :
+        `média=${p.mediaRef??"AUCUN"} (vision ${p.visualEvidence?.verifiedBy==="vision_observation_v1"?"contrôlée":"NON CONTRÔLÉE"})`;
+      return `    [${p.id}] ${p.inSec}-${p.outSec}s ${type}`;
+    });
+    return `  ${s.order}. [${s.id}] ${s.title} — ${s.durationSec}s, ${s.shots?.length ?? 0} plan(s)${s.mood ? `, ${s.mood}` : ""}
+    Récit : ${words.slice(0,1200)}${words.length>1200?" …[utiliser get_film pour texte complet]":""}
+${shotDescriptions.join("\n") || "    AUCUN PLAN"}`;
+  });
   const total = (f.scenes ?? []).reduce((n: number, s: Json) => n + (s.durationSec ?? 0), 0);
   return [
-    `Titre : ${f.info?.title} (type : ${f.info?.type}, langue : ${f.info?.language})`,
+    `Titre : ${f.info?.title} (type : ${f.info?.type}, langue : ${f.info?.language}, politique visuelle : ${f.info?.visualPolicy??"héritée"})`,
     `Format : ${f.format?.aspect} ${f.format?.width}x${f.format?.height} @${f.format?.fps}fps`,
     `Durée cumulée des scènes : ${total}s`,
     `Scènes (${f.scenes?.length ?? 0}) :${scenes.length ? "\n" + scenes.join("\n") : " aucune"}`,

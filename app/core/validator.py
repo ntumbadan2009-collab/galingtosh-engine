@@ -80,7 +80,8 @@ def validate_film(film: dict[str,Any]) -> dict[str,Any]:
                 errors.append(f"Caméra du plan {si+1}.{pi+1} invalide."); camera={}
             if camera.get("type","none") not in CAMERAS:
                 warnings.append(f"Caméra inconnue au plan {si+1}.{pi+1} : aucun mouvement appliqué.")
-            if not shot.get("mediaRef"): warnings.append(f"Plan {si+1}.{pi+1} sans média : fond noir/neutre.")
+            if not shot.get("mediaRef") and shot.get("visualMode") != "programmatic":
+                warnings.append(f"Plan {si+1}.{pi+1} sans média : fond noir/neutre.")
     for section,name,allowed in [(film.get("transitions",[]) or [],"transition",TRANSITIONS),(film.get("effects",[]) or [],"effet",EFFECTS)]:
         if not isinstance(section,list):
             errors.append(f"{name}s doit être un tableau."); continue

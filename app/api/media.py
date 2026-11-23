@@ -133,3 +133,54 @@ async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[
         raise HTTPException(status_code=422, detail="Analyse des passages impossible.") from None
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+class EvidenceFramesRequest(ProbeRequest):
+    source_in_sec: float = Field(default=0, ge=0, le=3600)
+    duration_sec: float = Field(ge=1.0, le=16.0)
+
+
+@user_router.post("/evidence-frames")
+async def evidence_frames(request: Request, payload: EvidenceFramesRequest) -> dict[str, Any]:
+    """Three actual frames for agent-side relevance review; NOT a semantic verdict."""
+    from app.media.evidence_frames import sample_visual_evidence
+
+    db = getattr(request.app.state, "supabase", None)
+    if not isinstance(db, SupabaseREST):
+        raise HTTPException(status_code=503, detail="Stockage média indisponible.")
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    mission_id = request.headers.get("X-Production-Mission", "")
+    authenticated = (await db.production_user_id(token, mission_id) if mission_id
+                     else await db.authenticated_user_id(token))
+    if not authenticated or authenticated != payload.user_id:
+        raise HTTPException(status_code=401, detail="Session invalide.")
+    rows = await db.read_media_assets(payload.project_id, [payload.media_id])
+    if not rows or str(rows[0].get("user_id")) != authenticated:
+        raise HTTPException(status_code=404, detail="Média introuvable.")
+    media = rows[0]
+    if media.get("kind") != "video":
+        raise HTTPException(status_code=422, detail="La preuve par images exige une vidéo.")
+    directory = Path(tempfile.mkdtemp(prefix="galingtosh-evidence-"))
+    target = directory / "source"
+    try:
+        if media.get("source") == "upload":
+            await db.download_user_upload(
+                str(media.get("storage_path") or ""), authenticated, target, 200*1024*1024
+            )
+        elif media.get("source") == "search":
+            provenance = media.get("provenance") or {}
+            url = provenance.get("download_url") or provenance.get("preview_url")
+            if not url:
+                raise HTTPException(status_code=422, detail="URL source absente.")
+            await download_public_media(str(url), target, 200*1024*1024)
+        else:
+            raise HTTPException(status_code=422, detail="Source média non prise en charge.")
+        return {"mediaId": payload.media_id, **await sample_visual_evidence(
+            target, payload.source_in_sec, payload.duration_sec,
+        )}
+    except HTTPException:
+        raise
+    except (OSError, ValueError, FFmpegError):
+        raise HTTPException(status_code=422, detail="Échantillonnage du passage impossible.") from None
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)

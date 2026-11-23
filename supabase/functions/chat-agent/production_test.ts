@@ -9,5 +9,9 @@ Deno.test("preflight refuses blank scenes and missing media",()=>{
  assert(preflight({scenes:[]},600)!==null,"empty movie");
  assert(preflight({scenes:[{durationSec:600,shots:[]}]},600)!==null,"missing shots");
  assert(preflight({scenes:[{durationSec:600,shots:[{mediaRef:"a"}]}],media:[]},600)!==null,"missing media");
- assert(preflight({scenes:[{durationSec:600,shots:[{mediaRef:"a"}]}],media:[{id:"a"}]},600)===null,"complete basic plan");
+ assert(preflight({scenes:[{durationSec:600,shots:[{mediaRef:"a"}]}],media:[{id:"a"}]},600)!==null,
+   "A file attached by ID is not automatically semantically relevant");
+ assert(preflight({scenes:[{durationSec:6,narration:{text:"Une démonstration illustrée fidèlement."},
+   shots:[{inSec:0,outSec:6,visualMode:"programmatic",visualText:"Une démonstration illustrée fidèlement."}]}]},6)===null,
+   "A code illustration quoting the approved narration is a complete plan");
 });

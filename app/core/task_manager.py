@@ -15,6 +15,7 @@ from app.config import Settings
 from app.core.renderer import FilmRenderer, RenderError, _rss_mb
 from app.core.checkpoints import SceneCheckpoints
 from app.core.narration import align_scene_narrations
+from app.core.narrative_policy import validate_narrative_policy
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
 from app.media.tts import synthesize_scene_narrations, synthesize_tts_tracks
@@ -140,6 +141,10 @@ class TaskManager:
             await self._patch(job_id, {"progress": 0})
             self.current["step"] = "lecture du Film JSON"
             film = await self.db.read_film(job["project_id"], int(job["film_version"]))
+            try:
+                validate_narrative_policy(film)
+            except ValueError as exc:
+                raise RenderError(str(exc)) from None
             if await self._is_canceled(job_id):
                 return
 
