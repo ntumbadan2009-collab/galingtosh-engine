@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     max_render_seconds: int = Field(default=600, ge=30)
     max_output_mb: int = Field(default=49, ge=1, le=49)
     temp_dir: str = "/tmp/galingtosh"
+    resend_api_key: str = ""  # Render secret only; never publish to the web client
+    email_from: str = ""  # e.g. notifications@galingtosh.online
+    email_notifications_enabled: bool = False  # enable only after DNS verification
 
 @lru_cache
 def get_settings() -> Settings:

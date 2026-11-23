@@ -47,3 +47,11 @@ Les migrations et fonctions Edge sont maintenant versionnées dans `supabase/`. 
 Le worker maintient son bail pendant toute la production, vérifie son identité avant chaque écriture et refuse de livrer un rendu dont un média référencé ou une narration demandée est indisponible. Les transitions préservent la durée du montage en prolongeant la dernière image sortante pendant le recouvrement ; `inSec` positionne un plan dans sa scène, tandis que `sourceInSec` désigne un éventuel point d’entrée dans le fichier source.
 
 Validation locale : 50 tests Python avec FFmpeg, 4 tests Deno des opérations du film et vérification TypeScript des fonctions. Les tests transactionnels sur Supabase (création, conflit de révision, version figée, dédoublonnage, annulation) ont été exécutés avec rollback.
+
+
+## Notifications transactionnelles (Resend)
+Après confirmation d'un rendu et dépôt de son MP4 dans Supabase Storage, le worker peut envoyer un email de notification au seul propriétaire dont l'adresse email Supabase Auth est vérifiée. L'URL dans l'email ouvre le studio après connexion ; aucun lien signé permanent ni secret n'est inclus. Une erreur d'envoi ne transforme jamais une vidéo produite en échec.
+
+Configurer dans Render **galingtosh-engine** uniquement : `RESEND_API_KEY` (clé d'envoi restreinte au domaine), `EMAIL_FROM=notifications@galingtosh.online` et `EMAIL_NOTIFICATIONS_ENABLED=true` **seulement après validation complète de `galingtosh.online` dans Resend**. Le domaine, les DNS SPF/DKIM et les notifications doivent être validés avant activation. Un `Idempotency-Key` stable par tâche limite les emails doublons. Ne pas ajouter la clé à des variables `VITE_*`, au dépôt Git ou dans l'application Android.
+
+Les emails de confirmation d'inscription et réinitialisation de mot de passe utilisent **Supabase Auth**, qui nécessite séparément une configuration SMTP personnalisée (`smtp.resend.com`, port 465/587, utilisateur `resend`, mot de passe = clé Resend) dans le tableau de bord du projet **Galingtosh 2**. Les réglages SMTP ne sont pas appliqués par les variables du moteur. Préserver la réception/transfert actuel de `contact@galingtosh.online` en configurant uniquement les enregistrements DNS nécessaires, sans remplacer la fonctionnalité Email Forwarding de Namecheap.
