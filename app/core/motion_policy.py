@@ -37,7 +37,7 @@ def motion_spec_issues(narration: Any, quote: Any, spec: Any) -> list[str]:
         return ["Spécification graphique : champs type et items requis uniquement."]
     kind = spec.get("type")
     items = spec.get("items")
-    if kind not in KINDS or not isinstance(items, list):
+    if not isinstance(kind, str) or kind not in KINDS or not isinstance(items, list):
         return ["Type graphique ou liste d'éléments invalide."]
     count = len(items)
     if ((kind == "focus" and count != 1)
