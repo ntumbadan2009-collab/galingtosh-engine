@@ -316,13 +316,11 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
     case "record_visual_verification": {
       const { scene, shot } = findShot(f, req(a, "shot_id"));
       const media = f.media.find((m:Json)=>m.id===shot.mediaRef);
-      if (!verifiedVisualEvidence(scene, shot, media ?? null) ||
-          JSON.stringify(shot.visualEvidence) !== JSON.stringify(a.evidence)) {
-        // Validate the tool-generated evidence on a synthetic shot; never allow
-        // the LLM to insert an unverified numeric score by a public film op.
-        const candidate = {...shot, visualEvidence:a.evidence};
-        if (!verifiedVisualEvidence(scene,candidate,media??null)) fail("Preuve de pertinence visuelle invalide.");
-      }
+      // Only the internal vision tool can call this operation; the schema
+      // still validates every sample, source timestamp, quote and media ref.
+      const candidate = {...shot, visualEvidence:a.evidence};
+      if (!verifiedVisualEvidence(scene,candidate,media??null))
+        fail("Preuve de pertinence visuelle invalide.");
       shot.visualEvidence = a.evidence;
       shot.visualMode = "media";
       delete shot.visualText; delete shot.cardStyle;
@@ -494,11 +492,23 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
 }
 
 export function summarizeFilm(f: Json): string {
-  const scenes = (f.scenes ?? []).map((s: Json) =>
-    `  ${s.order}. [${s.id}] ${s.title} — ${s.durationSec}s, ${s.shots?.length ?? 0} plan(s)${s.mood ? `, ${s.mood}` : ""}`);
+  // The autonomous director MUST see what each shot illustrates. A summary
+  // containing only scene counts causes arbitrary stock-media assignments.
+  const scenes = (f.scenes ?? []).map((s: Json) => {
+    const words = String(s.narration?.text || s.narrativeGoal || "");
+    const shotDescriptions = (s.shots ?? []).slice(0,50).map((p:Json) => {
+      const type = p.visualMode === "programmatic" ?
+        `code: "${String(p.visualText??"").slice(0,95)}"` :
+        `média=${p.mediaRef??"AUCUN"} (vision ${p.visualEvidence?.verifiedBy==="vision_observation_v1"?"contrôlée":"NON CONTRÔLÉE"})`;
+      return `    [${p.id}] ${p.inSec}-${p.outSec}s ${type}`;
+    });
+    return `  ${s.order}. [${s.id}] ${s.title} — ${s.durationSec}s, ${s.shots?.length ?? 0} plan(s)${s.mood ? `, ${s.mood}` : ""}
+    Récit : ${words.slice(0,1200)}${words.length>1200?" …[utiliser get_film pour texte complet]":""}
+${shotDescriptions.join("\n") || "    AUCUN PLAN"}`;
+  });
   const total = (f.scenes ?? []).reduce((n: number, s: Json) => n + (s.durationSec ?? 0), 0);
   return [
-    `Titre : ${f.info?.title} (type : ${f.info?.type}, langue : ${f.info?.language})`,
+    `Titre : ${f.info?.title} (type : ${f.info?.type}, langue : ${f.info?.language}, politique visuelle : ${f.info?.visualPolicy??"héritée"})`,
     `Format : ${f.format?.aspect} ${f.format?.width}x${f.format?.height} @${f.format?.fps}fps`,
     `Durée cumulée des scènes : ${total}s`,
     `Scènes (${f.scenes?.length ?? 0}) :${scenes.length ? "\n" + scenes.join("\n") : " aucune"}`,
