@@ -62,6 +62,17 @@ class SupabaseREST:
         except SupabaseError:
             return None
 
+    async def get_verified_user_email(self, user_id: str) -> str | None:
+        """Resolve only the render owner's verified address (Admin API)."""
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", user_id):
+            return None
+        response = await self._request("GET", f"/auth/v1/admin/users/{user_id}")
+        data = response.json()
+        email = data.get("email")
+        if not data.get("email_confirmed_at") or not isinstance(email, str):
+            return None
+        return email if len(email) <= 254 and "@" in email else None
+
     async def production_user_id(self, token: str, mission_id: str) -> str | None:
         """Only the trusted worker can act without a user session."""
         if not token or not hmac.compare_digest(token, self.key):
