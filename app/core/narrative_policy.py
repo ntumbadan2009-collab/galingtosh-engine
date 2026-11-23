@@ -12,6 +12,7 @@ import math
 import re
 import unicodedata
 from typing import Any
+from app.core.motion_policy import motion_spec_issues
 
 MIN_RELEVANCE = 0.82
 MIN_QUALITY = 0.55
@@ -120,6 +121,8 @@ def narrative_issues(film: dict) -> list[str]:
                     problems.append(f"Plan {si+1}.{pi+1} : illustration par code sans extrait fidèle de narration.")
                 if duration > MAX_CODE_CARD_SECONDS:
                     problems.append(f"Plan {si+1}.{pi+1} : carte trop longue (> {MAX_CODE_CARD_SECONDS:g}s).")
+                for issue in motion_spec_issues(narration, shot.get("visualText"), shot.get("visualSpec")):
+                    problems.append(f"Plan {si+1}.{pi+1} : {issue}")
             else:
                 media = media_index.get(shot.get("mediaRef"))
                 if not media or not _visual_evidence_valid(shot, media, narration):
