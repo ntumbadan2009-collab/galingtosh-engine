@@ -3,7 +3,7 @@
 import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from "./film.ts";
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
-import { planNarrativeBeats, quotedFromNarration, narrativePreflight,
+import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
          MIN_RELEVANCE, MIN_VISUAL_QUALITY } from "./narrative.ts";
 
 export interface Ctx {
@@ -51,10 +51,16 @@ export const TOOLS: ToolDef[] = [
   tool("remove_scene", "Supprime une scène et ses plans.", { scene_id: S() }, ["scene_id"]),
   tool("reorder_scenes", "Réordonne les scènes : fournir TOUS les ids dans le nouvel ordre.", { scene_ids: { type: "array", items: S() } }, ["scene_ids"]),
   tool("plan_scene_beats", "Découpe le récit réel d'une scène en phrases illustrables avec minutage. Chaque extrait est une citation EXACTE du texte, jamais des faits inventés. Utilise ces intervalles pour créer plusieurs plans visuellement pertinents.", { scene_id: S() }, ["scene_id"]),
-  tool("add_code_shot", "Ajoute un plan graphique réalisé UNIQUEMENT par code : typographie animée, composition et mise en évidence d'une citation EXACTE du récit. Choisis cette option lorsque la pertinence d'une vidéo/photo n'est pas certaine. Pas de média externe; maximum 12 secondes par plan.",
-    { scene_id:S(), visualText:S("extrait EXACT de la narration, sans paraphrase ni nouveau fait"), cardStyle:E(["focus","question","contrast","process"]), inSec:N(), outSec:N(), position:N() }, ["scene_id","visualText","outSec"]),
-  tool("turn_shot_into_code", "Remplace un plan média douteux par une illustration créée par code à partir d'une citation EXACTE de la scène (le plan doit durer au plus 12s). Conserve les autres plans.",
-    { shot_id:S(), visualText:S(), cardStyle:E(["focus","question","contrast","process"]) }, ["shot_id","visualText"]),
+  tool("add_code_shot", "Crée sans image/vidéo externe un plan narratif par Python/FFmpeg (12 s max). visualText cite exactement une séquence du récit. RECOMMANDÉ niveau 2 : visualType=focus (mise en valeur), steps (schéma à étapes), timeline (chronologie explicite), comparison (contraste explicite) et visualItems=fragments exacts de visualText, dans leur ordre. Les éléments s'animent progressivement. Ne fabrique pas de données ni de conclusions graphiques.",
+    { scene_id:S(), visualText:S("citation EXACTE de la narration, maximum 280 caractères"),
+      cardStyle:E(["focus","question","contrast","process"]), visualType:E([...MOTION_TYPES]),
+      visualItems:{type:"array",items:S("extrait textuel EXACT du visualText, maximum 125 caractères")},
+      inSec:N(), outSec:N(), position:N() }, ["scene_id","visualText","outSec"]),
+  tool("turn_shot_into_code", "Remplace une vidéo/image inadaptée par une animation explicative 100 % code, sans toucher aux autres plans. Le texte reste une citation exacte, 12 s maximum.",
+    { shot_id:S(), visualText:S(), cardStyle:E(["focus","question","contrast","process"]),
+      visualType:E([...MOTION_TYPES]),visualItems:{type:"array",items:S("citation exacte du récit")} }, ["shot_id","visualText"]),
+  tool("set_motion_visual", "Transforme un plan programmatique existant en schéma animable. focus=une phrase, steps=2–4 étapes, timeline=2–4 événements temporels explicites, comparison=2 points avec contraste explicite. Tous les éléments doivent être des extraits EXACTS du visualText existant, dans l'ordre, sans chiffre inventé.",
+    {shot_id:S(),visualType:E([...MOTION_TYPES]),visualItems:{type:"array",items:S("citation exacte du texte de narration")}}, ["shot_id","visualType","visualItems"]),
   tool("verify_shot_media", "OBLIGATOIRE AVANT RENDU pour tout plan utilisant une image/vidéo réelle en création autonome. Examine les images RÉELLES du fichier, compare-les à la citation exacte de la narration, et enregistre une preuve seulement si elles illustrent directement le propos. Retourne un refus si ambigu ou hors sujet : choisir alors turn_shot_into_code.",
     { shot_id:S(), narrationQuote:S("extrait EXACT du texte narré au moment de ce plan"), visualIntent:S("éléments visuels concrets que ce passage doit montrer, sans généralités") }, ["shot_id","narrationQuote","visualIntent"]),
   tool("add_shot", "Ajoute un plan à une scène. inSec/outSec = bornes du plan dans la scène. Un plan avec média devra être vérifié par verify_shot_media avant le rendu autonome.",
@@ -96,7 +102,7 @@ export const TOOLS: ToolDef[] = [
 
 const FILM_OPS = new Set([
   "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
-  "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "add_code_shot", "turn_shot_into_code", "update_shot", "remove_shot",
+  "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "add_code_shot", "turn_shot_into_code", "set_motion_visual", "update_shot", "remove_shot",
   "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_scene_music", "update_subtitles",
 ]);
 
