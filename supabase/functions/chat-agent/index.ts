@@ -3,6 +3,7 @@ import { corsHeaders, json } from "./cors.ts";
 import { complete, llmConfig, type NMsg } from "./llm.ts";
 import { execTool, TOOLS, type Ctx } from "./tools.ts";
 import { summarizeFilm } from "./film.ts";
+import {verifyPrecisionRevision} from "./precision_revision.ts";
 import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
 import {interpretPlanReply} from "./proposal-intents.ts";
 
@@ -133,6 +134,32 @@ async function handle(req: Request): Promise<Response> {
   const { data: u, error: ue } = await admin.auth.getUser(token);
   if (ue || !u?.user) return json({ error: "Non authentifié" }, 401);
   const userId = u.user.id;
+  // Explicit authenticated client action, not a model-callable mutation.
+  if(body?.action==="apply_precision_revision"){
+    const {projectId,filmId,version,rev,edits,sourceHash,candidateHash}=body;
+    if(![projectId,filmId].every(x=>typeof x==="string"&&UUID.test(x))||
+      !Number.isSafeInteger(version)||!Number.isSafeInteger(rev)||
+      ![sourceHash,candidateHash].every(x=>typeof x==="string"&&/^[0-9a-f]{64}$/.test(x)))
+      return json({error:"Révision invalide."},400);
+    const {data:owned,error:ownerError}=await admin.from("projects").select("id").eq("id",projectId).eq("user_id",userId).maybeSingle();
+    if(ownerError||!owned)return json({error:"Projet introuvable."},404);
+    const {data:mission,error:missionError}=await admin.from("production_missions").select("id")
+      .eq("project_id",projectId).eq("user_id",userId).not("status","in","(done,failed,canceled,needs_review)").limit(1).maybeSingle();
+    if(missionError||mission)return json({error:"Révision indisponible pendant une production active."},409);
+    const {data:row,error:loadError}=await admin.from("films").select("id,data,version,rev")
+      .eq("project_id",projectId).eq("user_id",userId).order("version",{ascending:false}).limit(1).maybeSingle();
+    if(loadError||!row||row.id!==filmId||row.version!==version||row.rev!==rev)
+      return json({error:"Version de travail modifiée. Recrée la prévisualisation."},409);
+    try{
+      const p=await verifyPrecisionRevision(row.data,edits,sourceHash,candidateHash);
+      const {data:saved,error:saveError}=await admin.rpc("save_film_operation",{
+        p_user_id:userId,p_film_id:row.id,p_rev:row.rev,p_data:p.candidate,
+        p_op:{name:"precision_revision",args:{edits:p.receipt.edits,sourceHash,candidateHash}}
+      });
+      if(saveError||!saved)return json({error:"Révision non enregistrée; recharge le film."},409);
+      return json({ok:true,applied:true,filmId,version,changes:p.receipt.changes,renderRequested:false});
+    }catch{return json({error:"Révision refusée ou prévisualisation obsolète."},409);}
+  }
   if(body?.action==="approve_production"||body?.action==="control_production"){
     const missionId=body.mission_id;
     if(typeof missionId!=="string"||!UUID.test(missionId))return json({error:"Mission invalide"},400);
@@ -301,7 +328,7 @@ async function handle(req: Request): Promise<Response> {
   const draftContext=pendingDraft
     ? `\nPROPOSITION CRÉATIVE EN ATTENTE (NON APPROUVÉE). Objectif original : ${pendingDraft.goal}. Durée cible actuelle : ${pendingDraft.target_seconds} secondes. Proposition actuelle :\n${pendingDraft.plan}\nL'utilisateur peut donner des modifications libres dans le chat. S'il demande un ajustement, appelle UNIQUEMENT propose_production en conservant l'objectif original et les autres éléments non concernés. Ne touche PAS au Film JSON ou aux médias avant validation. Si l'utilisateur pose une question, réponds normalement sans modifier le plan. La réponse courte OK est traitée séparément et n'arrive pas au modèle.`
     : "";
-  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une simple modification locale sans demande de nouvelle production, conserve le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
+  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une modification locale d’un schéma animé existant, propose preview_precision_revision. Cette prévisualisation n’enregistre rien : ne prétends jamais que la révision a été appliquée. Les autres modifications locales conservent le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
   const availableTools=pendingDraft?[PROPOSAL_TOOL]:[...TOOLS,PROPOSAL_TOOL];
 
   const ctx: Ctx = { admin, userId, authToken: token, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };
