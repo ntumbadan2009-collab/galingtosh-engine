@@ -1,4 +1,5 @@
 import { applyOperation } from "./film.ts";
+import {auditFoundations} from "./foundations.ts";
 import { narrativePreflight } from "./narrative.ts";
 import { editorialTimelineIssues } from "./editorial.ts";
 
@@ -38,7 +39,7 @@ export async function attemptCinematicRepair(admin:any,mission:any,snapshot:any)
     .eq("mission_id",mission.id).eq("render_job_id",mission.render_job_id).like("check_name","level4_visual_%").eq("passed",false);
   if(error)return false;
   const plan=candidateRepairs(snapshot,reports??[]);
-  if(!plan)return false;
+  if(!plan||!auditFoundations(plan.film).passed)return false;
   const {data,error:retryError}=await admin.rpc("retry_cinematic_repair",{
     p_mission_id:mission.id,p_lease:mission.lease_token,p_render:mission.render_job_id,p_ids:plan.ids
   });
