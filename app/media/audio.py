@@ -11,7 +11,7 @@ def _db(value: Any) -> float:
     except (TypeError, ValueError): return 0.0
 
 async def mix_audio(video: Path, tracks: list[dict], media_files: dict[str, Path], destination: Path,
-                    total_duration: float, bitrate_kbps: int = 128, *, editorial: bool = False) -> tuple[bool, list[str]]:
+                    total_duration: float, bitrate_kbps: int = 128, *, editorial: bool = False, adaptive: bool = False) -> tuple[bool, list[str]]:
     """Mixage multipiste avec placement temporel, répétition musicale et limiteur."""
     inputs=[]; warnings=[]
     for track in tracks:
@@ -59,7 +59,18 @@ async def mix_audio(video: Path, tracks: list[dict], media_files: dict[str, Path
         labels.append(f"[{label}]")
     fade_duration = min(0.08 if editorial else 1.0, max(0.05, total_duration))
     fade_start = max(0.0, total_duration - fade_duration)
-    if len(labels) == 1:
+    voices=[label for label,item in zip(labels,inputs) if item[-1] in {"voiceover","dialogue"}]
+    beds=[label for label,item in zip(labels,inputs) if item[-1] not in {"voiceover","dialogue"}]
+    if adaptive and voices and beds:
+        def bus(items,name):
+            if len(items)==1: graph.append(f"{items[0]}anull[{name}]")
+            else: graph.append("".join(items)+f"amix=inputs={len(items)}:duration=longest:normalize=0[{name}]")
+        bus(voices,"voice_bus")
+        bus(beds,"bed_bus")
+        graph.append("[voice_bus]asplit=2[voice_key][voice_main]")
+        graph.append("[bed_bus][voice_key]sidechaincompress=threshold=0.025:ratio=5:attack=20:release=280[ducked]")
+        graph.append("[voice_main][ducked]amix=inputs=2:duration=longest:normalize=0[mixed]")
+    elif len(labels) == 1:
         graph.append(f"{labels[0]}anull[mixed]")
     else:
         graph.append("".join(labels) + f"amix=inputs={len(labels)}:duration=longest:normalize=0:dropout_transition=2[mixed]")

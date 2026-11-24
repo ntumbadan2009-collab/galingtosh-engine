@@ -330,7 +330,7 @@ class FilmRenderer:
                 media_files = {**media_files, "__editorial_accents": accent_path}
                 tracks.append({"id":"__editorial_accents","kind":"sfx","mediaRef":"__editorial_accents","volumeDb":-10})
             has_audio, audio_warnings = await mix_audio(styled, tracks, media_files, output,
-                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128), editorial=editorial)
+                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128), editorial=editorial, adaptive=(film.get("info") or {}).get("editorialLevel")==4)
             warnings.extend(audio_warnings)
             _memory("after_audio_mix")
             if progress_callback: await progress_callback(89, "mixage audio terminé")
@@ -368,7 +368,7 @@ class FilmRenderer:
                 "width": video.get("width"), "height": video.get("height"), "fps": fps,
                 "size_mb": round(size_mb, 3), "compression": compression, "warnings": list(dict.fromkeys(warnings)),
                 "audio": any(s.get("codec_type") == "audio" for s in streams),
-                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa, "editorial_accents": accents}
+                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa, "editorial_accents": accents, "editorial_level": (film.get("info") or {}).get("editorialLevel")}
         except (OSError, FFmpegError) as exc:
             raise RenderError(str(exc)) from None
         finally:

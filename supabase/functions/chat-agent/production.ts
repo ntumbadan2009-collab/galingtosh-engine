@@ -3,6 +3,7 @@ import { execTool, TOOLS, type Ctx } from "./tools.ts";
 import { summarizeFilm, type Json } from "./film.ts";
 import { narrativePreflight } from "./narrative.ts";
 import { EDITORIAL_DIRECTION, editorialTimelineIssues } from "./editorial.ts";
+import { reviewNext } from "./cinematic.ts";
 
 // Only the trusted server-side worker may claim missions. No end-user JWT is
 // persisted. Each tick performs at most one externally observable tool call.
@@ -49,6 +50,7 @@ export function preflight(film:any,target:number):string|null{
  if(!Array.isArray(scenes)||!scenes.length)return "Le film ne contient pas de scènes.";
  const total=scenes.reduce((n:number,s:any)=>n+Number(s.durationSec||0),0);
  if(!durationMatches(total,target))return "La durée du montage ne correspond pas à la durée approuvée.";
+ if(film?.info?.editorialLevel===4 && scenes.reduce((n:number,s:any)=>n+(s.shots?.length??0),0)>240)return "Le niveau 4 est limité à 240 plans par production.";
  const issues=[...narrativePreflight(film), ...editorialTimelineIssues(film)];
  if(issues.length)return "Montage visuel non vérifié : "+issues.slice(0,3).join(" ");
  return null;
@@ -67,11 +69,23 @@ export async function productionTick(admin:any,serviceToken:string,system:string
   }
   if(r.status!=="done"){await release("waiting_render",null,15);return {status:"waiting_render"};}
   const ok=durationMatches(r.technical_report?.duration_seconds,m.target_seconds)&&!!r.output_path&&Number(r.technical_report?.width)>0&&Number(r.technical_report?.height)>0;
+  // Use the immutable rendered film version, never a newer working draft.
+  const {data:jobVersion,error:versionError}=await admin.from("render_jobs").select("film_version").eq("id",m.render_job_id).eq("user_id",m.user_id).eq("project_id",m.project_id).single();
+  if(versionError||!jobVersion){await release("waiting_render","render_version_unavailable",30);return {status:"waiting_render"};}
+  const {data:snapshot,error:snapshotError}=await admin.from("films").select("data").eq("project_id",m.project_id).eq("user_id",m.user_id).eq("version",jobVersion.film_version).single();
+  if(snapshotError||!snapshot){await release("waiting_render","render_snapshot_unavailable",30);return {status:"waiting_render"};}
+  const cinematic=snapshot.data?.info?.editorialLevel===4;
+  if(ok&&cinematic){
+   const result=await reviewNext(admin,m,r.technical_report);
+   if(result==="rejected"){await release("needs_review","cinematic_visual_rejected");return {status:"needs_review"};}
+   if(result==="unavailable"){await release(m.retry_count>=3?"needs_review":"waiting_render","cinematic_review_unavailable",30);return {status:"waiting_render"};}
+   if(result==="pending"){await release("waiting_render",null,2);return {status:"waiting_render"};}
+  }
   const {error:reportError}=await admin.from("quality_reports").insert({mission_id:m.id,render_job_id:m.render_job_id,check_name:"duration_and_video_metadata",passed:ok,evidence:r.technical_report??{}});
   if(reportError){await release("waiting_render","report_unavailable",30);return {status:"waiting_render"};}
   if(!ok){await release("needs_review","technical_quality_failed");return {status:"needs_review"};}
   try{await release("done");}catch{await release("needs_review","output_not_verified");return {status:"needs_review"};}
-  await admin.from("messages").insert({conversation_id:m.conversation_id,user_id:m.user_id,role:"assistant",content:"La production est terminée. Le fichier vidéo et sa durée ont été vérifiés. Tu peux regarder le résultat dans ton projet.",metadata:{production_mission_id:m.id,render_job_id:m.render_job_id}});
+  await admin.from("messages").insert({conversation_id:m.conversation_id,user_id:m.user_id,role:"assistant",content:cinematic?"La production est terminée. Le fichier, la durée et deux images finales par plan ont passé les contrôles disponibles. Le jugement ne couvre pas le mouvement continu ni le sens du son.":"La production est terminée. Le fichier vidéo et sa durée ont été vérifiés. Tu peux regarder le résultat dans ton projet.",metadata:{production_mission_id:m.id,render_job_id:m.render_job_id}});
   return {status:"done"};
  }
  if(m.step_count>=m.max_steps){await release("needs_review","operation_budget_exhausted");return {status:"needs_review"};}

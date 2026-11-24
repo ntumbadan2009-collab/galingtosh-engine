@@ -17,6 +17,7 @@ from app.core.checkpoints import SceneCheckpoints
 from app.core.narration import align_scene_narrations
 from app.core.narrative_policy import validate_narrative_policy
 from app.core.editorial_repair import repair_unavailable_media
+from app.core.cinematic_review import collect_review_batches
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
 from app.media.tts import synthesize_scene_narrations, synthesize_tts_tracks
@@ -230,6 +231,17 @@ class TaskManager:
                                 (film.get("info") or {}).get("language"))
 
             project_id = str(job["project_id"])
+            if (film.get("info") or {}).get("editorialLevel") == 4:
+                self.current["step"] = "préparation des preuves cinématographiques"
+                batches = await collect_review_batches(output,film,workdir/"cinematic-review")
+                manifest = []
+                for batch in batches:
+                    if await self._is_canceled(job_id):
+                        return
+                    object_path = f"{project_id}/{job_id}.review.{batch['index']:03d}.json"
+                    await self.db.upload_file("renders",object_path,batch["path"],"application/json")
+                    manifest.append({"index":batch["index"],"count":batch["count"]})
+                result["cinematic_review"] = {"version":1,"batches":manifest,"sampling":"two_final_frames_per_shot","semantic_review":"pending"}
             output_object = f"{project_id}/{job_id}.mp4"
             self.current["step"] = "envoi du rendu"
             if await self._is_canceled(job_id):

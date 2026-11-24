@@ -7,7 +7,7 @@ from pathlib import Path
 from app.media.ffmpeg import FFmpegError, require_binary
 
 def level3(film: dict) -> bool:
-    return (film.get("info") or {}).get("editorialLevel") == 3
+    return (film.get("info") or {}).get("editorialLevel") in {3, 4}
 
 def timeline_issues(film: dict) -> list[str]:
     issues = []
