@@ -32,7 +32,9 @@ export function selectVariant(rows:Verdict[]){
 const SHA=/^[0-9a-f]{64}$/;
 async function sha(bytes:Uint8Array){return [...new Uint8Array(await crypto.subtle.digest("SHA-256",new Uint8Array(bytes)))].map(x=>x.toString(16).padStart(2,"0")).join("");}
 export async function reviewTrial(cfg:LlmCfg,directory:string,priority:string){
- const manifest=JSON.parse(await Deno.readTextFile(directory+"/comparison.json"));
+ const manifestBytes=await Deno.readFile(directory+"/comparison.json");
+ const manifestSha256=await sha(manifestBytes);
+ const manifest=JSON.parse(new TextDecoder().decode(manifestBytes));
  if(manifest.version!==1||manifest.status!=="needs_artistic_review"||!Array.isArray(manifest.candidates)||manifest.candidates.length!==2||!Array.isArray(manifest.pairedEvidence)||manifest.pairedEvidence.length<1||manifest.pairedEvidence.length>2)throw Error("trial_manifest_invalid");
  const hashes:Record<string,string>={};
  for(const [i,c] of manifest.candidates.entries()){
@@ -55,5 +57,53 @@ export async function reviewTrial(cfg:LlmCfg,directory:string,priority:string){
   rows.push(...parseVariantReview(v.text,ids));input+=v.usage.input;output+=v.usage.output;
  }
  if(rows.length!==manifest.pairedEvidence.reduce((n:number,b:any)=>n+b.count,0)||rows.length>4)throw Error("trial_coverage_invalid");
- return {...selectVariant(rows),candidateHashes:hashes,rows,usage:{input,output},limitations:"Recommandation visuelle uniquement, sans écoute ni observation continue; aucune modification ou publication."};
+ return {...selectVariant(rows),manifestSha256,candidateHashes:hashes,rows,usage:{input,output},limitations:"Recommandation visuelle uniquement, sans écoute ni observation continue; aucune modification ou publication."};
+}
+
+/** Select only from an independently reviewed, immutable private trial.
+ * No database mutation or publication; a receipt is the commit marker. */
+export function selectionWinner(review:Awaited<ReturnType<typeof reviewTrial>>):"A"|"B"|null {
+ const expected=selectVariant(review.rows);
+ if(review.status!==expected.status||review.winner!==expected.winner)throw Error("trial_verdict_mismatch");
+ if(expected.status!=="visual_recommendation")return null;
+ if(expected.winner!=="A"&&expected.winner!=="B")throw Error("trial_winner_invalid");
+ return expected.winner;
+}
+export async function applyTrialSelection(directory:string,review:Awaited<ReturnType<typeof reviewTrial>>){
+ const winner=selectionWinner(review);
+ if(!winner)return {status:"needs_review",winner:null};
+ const manifestBytes=await Deno.readFile(directory+"/comparison.json");
+ if(await sha(manifestBytes)!==review.manifestSha256)throw Error("trial_manifest_changed");
+ const manifest=JSON.parse(new TextDecoder().decode(manifestBytes));
+ if(manifest.status!=="needs_artistic_review"||manifest.candidates?.length!==2)throw Error("trial_manifest_invalid");
+ const hashes:Record<string,string>={};
+ const bytes:Record<string,Uint8Array>={};
+ for(const [i,c] of manifest.candidates.entries()){
+  if(c.id!==["A","B"][i]||c.report?.editorial_quality?.passed!==true||!SHA.test(c.sha256)||review.candidateHashes[c.id]!==c.sha256)throw Error("trial_candidate_changed");
+  bytes[c.id]=await Deno.readFile(directory+"/"+c.id+".mp4");
+  if(await sha(bytes[c.id])!==c.sha256)throw Error("trial_candidate_changed");
+  hashes[c.id]=c.sha256;
+ }
+ if(manifest.candidates[0].audioSha256!==manifest.candidates[1].audioSha256)throw Error("trial_audio_not_comparable");
+ const ids:string[]=[];
+ for(const b of manifest.pairedEvidence){
+  const name="paired_"+String(b.index).padStart(3,"0")+".json";
+  if(b.file!==name)throw Error("trial_batch_invalid");
+  const data=await Deno.readFile(directory+"/"+name);
+  if(await sha(data)!==b.sha256)throw Error("trial_batch_integrity");
+  const pair=JSON.parse(new TextDecoder().decode(data));
+  ids.push(...pair.shots.map((s:{shotId:string})=>s.shotId));
+ }
+ parseVariantReview(JSON.stringify(review.rows),ids);
+ const version=review.manifestSha256+"-"+winner;
+ const target=directory+"/selected-"+version;
+ const receipt={version,winner,sha256:hashes[winner],manifestSha256:review.manifestSha256,status:"private_selection",review,publication:false};
+ // Exclusive directory creation prevents concurrent replacements. Receipt last: without it
+ // an interrupted selection must never be treated as committed.
+ await Deno.mkdir(target);
+ try{
+  await Deno.writeFile(target+"/selected.mp4",bytes[winner],{createNew:true,mode:0o600});
+  await Deno.writeTextFile(target+"/selection.json",JSON.stringify(receipt,null,2),{createNew:true,mode:0o600});
+ }catch(e){await Deno.remove(target,{recursive:true});throw e;}
+ return receipt;
 }
