@@ -38,7 +38,7 @@ jobs:
             echo "::error::Real-provider review unavailable: repository LLM configuration missing. No selection or release authorized."
             exit 1
           fi
-          deno run --allow-env=LLM_PROVIDER,LLM_MODEL,LLM_API_KEY,LLM_BASE_URL --allow-net --allow-read=hybrid-validation/trial --allow-write=hybrid-validation/trial scripts/review_trial.ts hybrid-validation/trial "Illustrer fidèlement chaque extrait de narration."
+          deno run --allow-env=LLM_PROVIDER,LLM_MODEL,LLM_API_KEY,LLM_BASE_URL,LLM_FALLBACK_MODELS --allow-net --allow-read=hybrid-validation/trial --allow-write=hybrid-validation/trial scripts/review_trial.ts hybrid-validation/trial "Illustrer fidèlement chaque extrait de narration."
       - uses: actions/upload-artifact@v4
         if: always()
         with:
