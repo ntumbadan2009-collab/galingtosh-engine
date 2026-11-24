@@ -39,6 +39,7 @@ export async function reviewTrial(cfg:LlmCfg,directory:string,priority:string){
   if(c.id!==["A","B"][i]||!SHA.test(c.sha256)||c.report?.editorial_quality?.passed!==true||await sha(await Deno.readFile(directory+"/"+c.id+".mp4"))!==c.sha256)throw Error("trial_video_integrity");
   hashes[c.id]=c.sha256;
  }
+ if(manifest.candidates[0].audioSha256!==manifest.candidates[1].audioSha256||manifest.candidates.some((c:any)=>c.report?.audio===true?!SHA.test(c.audioSha256):c.audioSha256!==null))throw Error("trial_audio_not_comparable");
  const rows:Verdict[]=[];let input=0,output=0;
  for(const [index,b] of manifest.pairedEvidence.entries()){
   const name="paired_"+String(index).padStart(3,"0")+".json";

@@ -75,6 +75,7 @@ async def main(root:Path):
     assert result["winner"] is None
     assert all(c["report"]["audio"] and c["report"]["subtitles_burned"] and abs(c["report"]["duration_seconds"]-duration)<.1 for c in result["candidates"])
     assert result["candidates"][0]["sha256"]!=result["candidates"][1]["sha256"]
+    assert result["candidates"][0]["audioSha256"] and result["candidates"][0]["audioSha256"]==result["candidates"][1]["audioSha256"]
     meta={"source":PHOTO_PAGE,"credit":"Harrison Schmitt / Apollo 17 / NASA","license":"Public domain in the United States (NASA)","sourceSha256":photo_hash,
           "voice":"offline espeak-ng","visualEvidence":"fixture only; no live model verification","A":"code and geometric animation","B":"actual archival photo and same geometric animation"}
     (root/"trial"/"fixture_provenance.json").write_text(json.dumps(meta,indent=2),encoding="utf-8")

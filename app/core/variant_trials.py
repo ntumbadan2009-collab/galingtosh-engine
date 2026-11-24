@@ -17,6 +17,8 @@ from app.core.renderer import FilmRenderer
 from app.core.narrative_policy import narrative_issues
 from app.core.editorial import timeline_issues
 from app.core.cinematic_review import collect_review_batches
+from app.media.editorial_motion import accent_events
+from app.media.ffmpeg import run_ffmpeg
 
 VISUAL_FIELDS={"visualMode","visualText","visualSpec","visualEvidence","mediaRef","sourceInSec","camera","cardStyle"}
 
@@ -48,6 +50,8 @@ def validate_trial(a:dict,b:dict)->None:
     for sa,sb in zip(a["scenes"][0]["shots"],b["scenes"][0]["shots"]):
         if _quote(sa)!=_quote(sb):
             raise ValueError("Les variantes doivent illustrer les mêmes extraits.")
+    if accent_events(a)!=accent_events(b):
+        raise ValueError("Les accents sonores automatiques diffèrent : comparaison non isolée.")
     if a==b:
         raise ValueError("Deux variantes identiques ne constituent pas un essai.")
 
@@ -95,7 +99,16 @@ async def render_trial(a:dict,b:dict,media_files:dict[str,Path],directory:Path)-
             raise ValueError("Échec technique de variante.")
         batches=await collect_review_batches(output,local,directory/f"{label}_evidence")
         with output.open("rb") as stream:sha=hashlib.file_digest(stream,"sha256").hexdigest()
-        results.append({"id":label,"sha256":sha,"report":report,"batches":[{"index":x["index"],"count":x["count"],"file":str(x["path"].relative_to(directory))} for x in batches]})
+        audio_sha=None
+        if report["audio"]:
+            pcm=directory/f"{label}_audio.pcm"
+            await run_ffmpeg(["-i",str(output),"-map","0:a:0","-vn","-ac","2","-ar","48000","-c:a","pcm_s16le","-f","s16le",str(pcm)])
+            try:
+                with pcm.open("rb") as stream:audio_sha=hashlib.file_digest(stream,"sha256").hexdigest()
+            finally:pcm.unlink(missing_ok=True)
+        results.append({"id":label,"sha256":sha,"audioSha256":audio_sha,"report":report,"batches":[{"index":x["index"],"count":x["count"],"file":str(x["path"].relative_to(directory))} for x in batches]})
+    if results[0]["audioSha256"]!=results[1]["audioSha256"]:
+        raise ValueError("Les pistes audio décodées diffèrent : aucune comparaison visuelle équitable.")
     result={"version":1,"candidates":results,"pairedEvidence":paired_evidence(directory,results),"status":"needs_artistic_review",
             "winner":None,"limitations":"Rendus réels et images échantillonnées; aucune écoute sémantique ni mesure de rétention. Aucune publication automatique."}
     (directory/"comparison.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
