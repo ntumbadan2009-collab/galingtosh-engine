@@ -11,7 +11,7 @@ def _db(value: Any) -> float:
     except (TypeError, ValueError): return 0.0
 
 async def mix_audio(video: Path, tracks: list[dict], media_files: dict[str, Path], destination: Path,
-                    total_duration: float, bitrate_kbps: int = 128) -> tuple[bool, list[str]]:
+                    total_duration: float, bitrate_kbps: int = 128, *, editorial: bool = False) -> tuple[bool, list[str]]:
     """Mixage multipiste avec placement temporel, répétition musicale et limiteur."""
     inputs=[]; warnings=[]
     for track in tracks:
@@ -25,6 +25,10 @@ async def mix_audio(video: Path, tracks: list[dict], media_files: dict[str, Path
             continue
         volume=_db(track.get("volumeDb",0)); events=track.get("events") or []
         kind=track.get("kind", "sfx")
+        # Preserve the foreground voice; this is a static mix policy, not adaptive ducking.
+        if editorial and any(t.get("kind") in {"voiceover", "dialogue"} and not t.get("disabled") for t in tracks if isinstance(t, dict)):
+            if kind == "music": volume = min(volume, -16.0)
+            elif kind == "sfx": volume = min(volume, -10.0)
         if not events: inputs.append((source,0.0,total_duration,kind=="music",volume,kind))
         else:
             for event in events:
@@ -53,7 +57,7 @@ async def mix_audio(video: Path, tracks: list[dict], media_files: dict[str, Path
         # graph could leave FFmpeg with unbound labels on films combining
         # multiple scene narrations and a procedural music bed.
         labels.append(f"[{label}]")
-    fade_duration = min(1.0, max(0.05, total_duration))
+    fade_duration = min(0.08 if editorial else 1.0, max(0.05, total_duration))
     fade_start = max(0.0, total_duration - fade_duration)
     if len(labels) == 1:
         graph.append(f"{labels[0]}anull[mixed]")

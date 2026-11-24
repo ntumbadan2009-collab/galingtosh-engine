@@ -45,7 +45,7 @@ function str(v: any, k: string, max = 2000): string {
 export function defaultFilm(title: string, type = "custom", language = "fr"): Json {
   const [width, height] = ASPECTS["16:9"];
   return {
-    info: { title, type, language, visualPolicy: "strict" },
+    info: { title, type, language, visualPolicy: "strict", editorialLevel: 3 },
     format: { aspect: "16:9", width, height, fps: 30 },
     scenes: [], characters: [], media: [], audio: { tracks: [] },
     effects: [], transitions: [], subtitles: [],

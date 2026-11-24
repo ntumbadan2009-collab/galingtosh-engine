@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from app.core.validator import validate_film
+from app.core.editorial import level3, timeline_issues, inspect_render
 from app.core.narrative_policy import narrative_issues
 from app.media.narrative_cards import render_code_card
 from app.media.motion_graphics import render_motion_graphic
@@ -97,6 +98,11 @@ class FilmRenderer:
                 raise RenderError("Montage non conforme aux preuves visuelles : " + " ".join(issues[:5]))
         if not report["valid"]:
             raise RenderError("Film JSON invalide : " + " ".join(report["errors"][:4]))
+        editorial = level3(film)
+        if editorial:
+            problems = timeline_issues(film)
+            if problems:
+                raise RenderError("Contrôle éditorial : " + " ".join(problems[:5]))
         scenes = sorted(film.get("scenes", []), key=lambda x: x.get("order", 0))
         total_duration = sum(float(s.get("durationSec", 0)) for s in scenes)
         if total_duration <= 0: raise RenderError("La durée totale du film doit être positive.")
@@ -300,7 +306,7 @@ class FilmRenderer:
                                # enforce a modest audible floor.
                                "volumeDb":max(-8.0, min(0.0, float(music.get("volumeDb", -8))))})
             has_audio, audio_warnings = await mix_audio(styled, tracks, media_files, output,
-                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128))
+                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128), editorial=editorial)
             warnings.extend(audio_warnings)
             _memory("after_audio_mix")
             if progress_callback: await progress_callback(89, "mixage audio terminé")
@@ -317,6 +323,20 @@ class FilmRenderer:
             size_mb = output.stat().st_size / (1024 * 1024)
             _memory("before_final_probe")
             probe = await probe_media(str(output))
+            qa = None
+            if editorial:
+                if progress_callback: await progress_callback(94, "contrôle audiovisuel du fichier final")
+                expected = [s for s in scenes if (s.get("narration") or {}).get("text")]
+                voices = []
+                for scene in expected:
+                    ref = "__scene_narration_" + str(scene.get("id", ""))
+                    voice = media_files.get(ref)
+                    if not voice or not voice.is_file():
+                        raise RenderError("Contrôle qualité : voix de scène manquante.")
+                    voices.append(voice)
+                qa = await inspect_render(output, probe, total_duration, bool(expected), voices, fps)
+                if not qa["passed"]:
+                    raise RenderError("Contrôle qualité : " + " ".join(qa["issues"]))
             _memory("render_complete")
             streams = probe.get("streams", [])
             video = next((s for s in streams if s.get("codec_type") == "video"), {})
@@ -324,7 +344,7 @@ class FilmRenderer:
                 "width": video.get("width"), "height": video.get("height"), "fps": fps,
                 "size_mb": round(size_mb, 3), "compression": compression, "warnings": list(dict.fromkeys(warnings)),
                 "audio": any(s.get("codec_type") == "audio" for s in streams),
-                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count}
+                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa}
         except (OSError, FFmpegError) as exc:
             raise RenderError(str(exc)) from None
         finally:

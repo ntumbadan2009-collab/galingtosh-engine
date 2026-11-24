@@ -36,6 +36,15 @@ def align_scene_narrations(film: dict[str, Any], durations: dict[str, float]) ->
             if "endSec" in cue:
                 cue["endSec"] = round(max(0.0, remap_time(float(cue["endSec"]))), 3)
 
+    # Sound effects and imported dialogue follow the same scene clock as captions.
+    if (film.get("info") or {}).get("editorialLevel") == 3:
+        for track in (film.get("audio") or {}).get("tracks", []) or []:
+            for event in track.get("events", []) or []:
+                start = float(event["startSec"])
+                end = start + float(event["durationSec"])
+                event["startSec"] = round(remap_time(start), 3)
+                event["durationSec"] = round(max(0.001, remap_time(end)-remap_time(start)), 3)
+
     offset = 0.0
     for scene in scenes:
         scene_id = str(scene.get("id", ""))
