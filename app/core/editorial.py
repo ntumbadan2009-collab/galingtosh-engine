@@ -49,10 +49,12 @@ async def inspect_render(path: Path, probe: dict, target: float, expect_voice: b
             stderr=asyncio.subprocess.PIPE)
         try:
             _, err = await asyncio.wait_for(proc.communicate(), timeout=max(120, target*3))
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
             if proc.returncode is None:
                 proc.kill()
             await proc.communicate()
+            if isinstance(exc, asyncio.TimeoutError):
+                raise FFmpegError("Contrôle qualité : délai dépassé.") from None
             raise
         if proc.returncode:
             raise FFmpegError("Contrôle qualité : décodage impossible.")
@@ -63,6 +65,11 @@ async def inspect_render(path: Path, probe: dict, target: float, expect_voice: b
         r"black_start:([\d.]+)\s+black_end:([\d.]+)", log)]
     if black:
         issues.append("Intervalles noirs détectés dans le fichier final.")
+    if expect_voice and any(s.get("codec_type") == "audio" for s in streams):
+        audio_log = await scan(path, True)
+        peak = re.search(r"max_volume:\s*(-?[\d.]+|-inf)\s*dB", audio_log)
+        if not peak or float(peak.group(1)) < -45:
+            issues.append("Mixage final silencieux ou inaudible.")
     for index, voice in enumerate(voice_sources, 1):
         log = await scan(voice, True)
         match = re.search(r"max_volume:\s*(-?[\d.]+|-inf)\s*dB", log)

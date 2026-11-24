@@ -12,6 +12,7 @@ from typing import Any, Callable, Awaitable
 
 from app.core.validator import validate_film
 from app.core.editorial import level3, timeline_issues, inspect_render
+from app.core.editorial_repair import replace_with_grounded_card
 from app.core.narrative_policy import narrative_issues
 from app.media.narrative_cards import render_code_card
 from app.media.motion_graphics import render_motion_graphic
@@ -156,6 +157,7 @@ class FilmRenderer:
                                                     f"scène {scene_index + 1} restaurée")
                         continue
                 cursor = 0.0
+                scene_repaired = False
                 scene_segment_start = len(segments)
                 for shot_index, shot in enumerate(shots):
                     start = max(0.0, float(shot.get("inSec", 0)))
@@ -235,6 +237,20 @@ class FilmRenderer:
                         else:
                             warnings.append(f"Type de média non visuel pour le plan {shot_index+1}.")
                             await self._black(segment, width, height, fps, duration)
+                    # Inspect the actual normalized external shot, not search tags.
+                    if editorial and shot.get("visualMode") != "programmatic":
+                        shot_probe = await probe_media(str(segment))
+                        checked = await inspect_render(segment, shot_probe, duration, False, [], fps)
+                        if not checked["passed"]:
+                            if not replace_with_grounded_card(scene, shot):
+                                raise RenderError("Plan défectueux sans remplacement narratif sûr : " + " ".join(checked["issues"]))
+                            card = work / f"repair_{scene_index:03d}_{shot_index:03d}.png"
+                            render_code_card(card,narration_quote=shot["visualText"],
+                                scene_title=str(scene.get("title") or ""),scene_number=scene_index+1,
+                                width=width,height=height,style=shot["cardStyle"])
+                            await normalize_image(card,segment,width,height,fps,duration,"none")
+                            scene_repaired = True
+                            warnings.append(f"Plan {shot.get('id')} réparé par citation fidèle : " + " ".join(checked["issues"]))
                     segments.append(segment)
                     segment_shot_ids.append(str(shot.get("id")) if shot.get("id") is not None else None)
                     segment_durations.append(duration); cursor = end
@@ -259,7 +275,7 @@ class FilmRenderer:
                         black = work / f"segment_{len(segments):04d}.mp4"
                         await self._black(black, width, height, fps, scene_duration-cursor)
                         segments.append(black); segment_shot_ids.append(None); segment_durations.append(scene_duration-cursor)
-                if checkpoints is not None and len(segments) > scene_segment_start:
+                if checkpoints is not None and not scene_repaired and len(segments) > scene_segment_start:
                     completed_scene = [
                         {"name": path.name, "shot_id": shot_id, "duration": duration}
                         for path, shot_id, duration in zip(

@@ -16,6 +16,7 @@ from app.core.renderer import FilmRenderer, RenderError, _rss_mb
 from app.core.checkpoints import SceneCheckpoints
 from app.core.narration import align_scene_narrations
 from app.core.narrative_policy import validate_narrative_policy
+from app.core.editorial_repair import repair_unavailable_media
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
 from app.media.tts import synthesize_scene_narrations, synthesize_tts_tracks
@@ -194,6 +195,7 @@ class TaskManager:
                     track["disabled"] = True
                     track.pop("mediaRef", None)
                     media_warnings.append(f"Effet « {expected or 'non décrit'} » omis : ce type de son n’est pas encore pris en charge par la synthèse procédurale.")
+            media_warnings.extend(await repair_unavailable_media(film, media_files))
             referenced = {shot.get("mediaRef") for scene in film.get("scenes", []) for shot in scene.get("shots", []) if shot.get("mediaRef")}
             referenced.update(track.get("mediaRef") for track in audio_tracks if track.get("mediaRef") and not track.get("disabled"))
             if referenced - media_files.keys():
