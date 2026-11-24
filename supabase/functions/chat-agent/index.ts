@@ -4,6 +4,7 @@ import { complete, llmConfig, type NMsg } from "./llm.ts";
 import { execTool, TOOLS, type Ctx } from "./tools.ts";
 import { summarizeFilm, applyOperation } from "./film.ts";
 import {FOUNDATION_POLICY} from "./foundations.ts";
+import {DIRECTOR_POLICY} from "./director_intelligence.ts";
 import {verifyPrecisionRevision} from "./precision_revision.ts";
 import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
 import {interpretPlanReply} from "./proposal-intents.ts";
@@ -350,7 +351,7 @@ async function handle(req: Request): Promise<Response> {
   const draftContext=pendingDraft
     ? `\nPROPOSITION CRÉATIVE EN ATTENTE (NON APPROUVÉE). Objectif original : ${pendingDraft.goal}. Durée cible actuelle : ${pendingDraft.target_seconds} secondes. Proposition actuelle :\n${pendingDraft.plan}\nL'utilisateur peut donner des modifications libres dans le chat. S'il demande un ajustement, appelle UNIQUEMENT propose_production en conservant l'objectif original et les autres éléments non concernés. Ne touche PAS au Film JSON ou aux médias avant validation. Si l'utilisateur pose une question, réponds normalement sans modifier le plan. La réponse courte OK est traitée séparément et n'arrive pas au modèle.`
     : "";
-  const system = `${SYSTEM}\n\n${FOUNDATION_POLICY}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une modification locale d’un schéma animé existant, propose preview_precision_revision. Cette prévisualisation n’enregistre rien : ne prétends jamais que la révision a été appliquée. Les autres modifications locales conservent le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
+  const system = `${SYSTEM}\n\n${FOUNDATION_POLICY}\n\n${DIRECTOR_POLICY}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une modification locale d’un schéma animé existant, propose preview_precision_revision. Cette prévisualisation n’enregistre rien : ne prétends jamais que la révision a été appliquée. Les autres modifications locales conservent le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
   const availableTools=pendingDraft?[PROPOSAL_TOOL]:[...TOOLS,PROPOSAL_TOOL];
 
   const ctx: Ctx = { admin, userId, authToken: token, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };
