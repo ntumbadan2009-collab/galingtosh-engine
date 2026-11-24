@@ -18,7 +18,7 @@ def replace_with_grounded_card(scene: dict, shot: dict) -> bool:
 
 async def repair_unavailable_media(film: dict, files: dict[str,Path]) -> list[str]:
     """Worker-local repair after voice alignment, without changing saved film or timings."""
-    if (film.get("info") or {}).get("editorialLevel") not in {3, 4} or (film.get("info") or {}).get("visualPolicy") != "strict":
+    if (film.get("info") or {}).get("editorialLevel") not in {3, 4, 5} or (film.get("info") or {}).get("visualPolicy") != "strict":
         return []
     media = {m.get("id"):m for m in film.get("media",[])}
     warnings=[]

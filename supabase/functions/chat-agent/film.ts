@@ -45,7 +45,7 @@ function str(v: any, k: string, max = 2000): string {
 export function defaultFilm(title: string, type = "custom", language = "fr"): Json {
   const [width, height] = ASPECTS["16:9"];
   return {
-    info: { title, type, language, visualPolicy: "strict", editorialLevel: 4 },
+    info: { title, type, language, visualPolicy: "strict", editorialLevel: 5 },
     format: { aspect: "16:9", width, height, fps: 30 },
     scenes: [], characters: [], media: [], audio: { tracks: [] },
     effects: [], transitions: [], subtitles: [],
@@ -262,7 +262,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         if (Number.isFinite(Number(cue.startSec))) cue.startSec = Math.max(0, remapTime(Number(cue.startSec)));
         if (Number.isFinite(Number(cue.endSec))) cue.endSec = Math.max(0, remapTime(Number(cue.endSec)));
       }
-      if ([3,4].includes(f.info?.editorialLevel)) for (const track of f.audio?.tracks ?? []) for (const event of track.events ?? []) {
+      if ([3,4,5].includes(f.info?.editorialLevel)) for (const track of f.audio?.tracks ?? []) for (const event of track.events ?? []) {
         const start = Number(event.startSec), end = start + Number(event.durationSec);
         if (Number.isFinite(start) && Number.isFinite(end)) {
           event.startSec = Math.max(0, remapTime(start));

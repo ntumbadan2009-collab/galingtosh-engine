@@ -231,7 +231,7 @@ class TaskManager:
                                 (film.get("info") or {}).get("language"))
 
             project_id = str(job["project_id"])
-            if (film.get("info") or {}).get("editorialLevel") == 4:
+            if (film.get("info") or {}).get("editorialLevel") in {4, 5}:
                 self.current["step"] = "préparation des preuves cinématographiques"
                 batches = await collect_review_batches(output,film,workdir/"cinematic-review")
                 manifest = []

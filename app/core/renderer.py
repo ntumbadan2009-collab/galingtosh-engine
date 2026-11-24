@@ -23,6 +23,7 @@ from app.media.transitions import assemble_segments
 from app.media.audio import mix_audio
 from app.media.compression import fit_mp4_to_limit
 from app.media.procedural import compose_bed
+from app.media.creative_music import compose_score
 from app.media.subtitles import write_srt
 from app.media.effects import build_video_filters, finish_video
 
@@ -315,14 +316,15 @@ class FilmRenderer:
             audio = film.get("audio") or {}
             tracks = list(audio.get("tracks") or [])
             music = audio.get("proceduralMusic") or {}
-            if music.get("enabled") and compose_bed(scenes, music.get("cues") or [], work / "procedural.wav"):
+            score = compose_score if (film.get("info") or {}).get("editorialLevel")==5 else compose_bed
+            if music.get("enabled") and await asyncio.to_thread(score, scenes, music.get("cues") or [], work / "procedural.wav"):
                 media_files = {**media_files, "__procedural_music": work / "procedural.wav"}
                 tracks.append({"id":"__procedural_music", "kind":"music", "mediaRef":"__procedural_music",
                                # Earlier plans stored -15 dB, which made this
                                # small procedural pad effectively inaudible on
                                # phone speakers. Keep it below narration but
                                # enforce a modest audible floor.
-                               "volumeDb":max(-8.0, min(0.0, float(music.get("volumeDb", -8))))})
+                               "volumeDb":max(-60.0, min(0.0, float(music.get("volumeDb", -8)))) if (film.get("info") or {}).get("editorialLevel")==5 else max(-8.0, min(0.0, float(music.get("volumeDb", -8))))})
             accents = accent_events(film) if editorial else []
             if accents:
                 accent_path = work / "editorial_accents.wav"
@@ -330,7 +332,7 @@ class FilmRenderer:
                 media_files = {**media_files, "__editorial_accents": accent_path}
                 tracks.append({"id":"__editorial_accents","kind":"sfx","mediaRef":"__editorial_accents","volumeDb":-10})
             has_audio, audio_warnings = await mix_audio(styled, tracks, media_files, output,
-                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128), editorial=editorial, adaptive=(film.get("info") or {}).get("editorialLevel")==4)
+                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128), editorial=editorial, adaptive=(film.get("info") or {}).get("editorialLevel") in {4,5})
             warnings.extend(audio_warnings)
             _memory("after_audio_mix")
             if progress_callback: await progress_callback(89, "mixage audio terminé")

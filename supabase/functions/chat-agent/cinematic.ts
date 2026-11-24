@@ -25,7 +25,7 @@ export function validateManifest(manifest:any):boolean {
 /** One batch per durable tick; no public URLs, no conclusions about unseen frames. */
 export async function reviewNext(admin:any,mission:any,report:any):Promise<"complete"|"pending"|"rejected"|"unavailable"> {
   const manifest=report?.cinematic_review;
-  if(report?.editorial_level!==4||report?.editorial_quality?.passed!==true||!validateManifest(manifest))return "unavailable";
+  if(![4,5].includes(report?.editorial_level)||report?.editorial_quality?.passed!==true||!validateManifest(manifest))return "unavailable";
   const {data:prior,error}=await admin.from("quality_reports").select("check_name,passed")
     .eq("mission_id",mission.id).eq("render_job_id",mission.render_job_id);
   if(error)return "unavailable";
