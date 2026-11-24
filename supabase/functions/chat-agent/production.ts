@@ -4,6 +4,7 @@ import { summarizeFilm, type Json } from "./film.ts";
 import { narrativePreflight } from "./narrative.ts";
 import { EDITORIAL_DIRECTION, editorialTimelineIssues } from "./editorial.ts";
 import { reviewNext } from "./cinematic.ts";
+import { attemptCinematicRepair } from "./cinematic_repair.ts";
 import { CREATIVE_ROLES, nextRole, creativeCall } from "./creative.ts";
 
 // Only the trusted server-side worker may claim missions. No end-user JWT is
@@ -78,7 +79,15 @@ export async function productionTick(admin:any,serviceToken:string,system:string
   const cinematic=[4,5].includes(snapshot.data?.info?.editorialLevel);
   if(ok&&cinematic){
    const result=await reviewNext(admin,m,r.technical_report);
-   if(result==="rejected"){await release("needs_review","cinematic_visual_rejected");return {status:"needs_review"};}
+   if(result==="rejected"){
+    try{
+     if(await attemptCinematicRepair(admin,m,snapshot.data))return {status:"waiting_render"};
+    }catch{
+     await release(m.retry_count>=3?"needs_review":"waiting_render","cinematic_repair_transaction_unavailable",30);
+     return {status:"waiting_render"};
+    }
+    await release("needs_review","cinematic_visual_rejected");return {status:"needs_review"};
+   }
    if(result==="unavailable"){await release(m.retry_count>=3?"needs_review":"waiting_render","cinematic_review_unavailable",30);return {status:"waiting_render"};}
    if(result==="pending"){await release("waiting_render",null,2);return {status:"waiting_render"};}
   }
