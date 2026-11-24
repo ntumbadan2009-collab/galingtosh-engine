@@ -16,16 +16,19 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from app.media.ffmpeg import run_ffmpeg
+from app.media.geometry3d import draw_geometry
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-VISUAL_TYPES = {"focus", "steps", "timeline", "comparison", "cause_effect"}
+VISUAL_TYPES = {"focus", "steps", "timeline", "comparison", "cause_effect", "cube_rotation", "sphere_rotation"}
 PALETTE = {
     "focus": ((10, 23, 42), (108, 229, 201)),
     "steps": ((12, 29, 44), (104, 205, 250)),
     "timeline": ((23, 23, 47), (192, 153, 255)),
     "comparison": ((33, 23, 40), (251, 170, 123)),
     "cause_effect": ((13, 35, 38), (95, 231, 195)),
+    "cube_rotation": ((14, 24, 43), (122, 219, 249)),
+    "sphere_rotation": ((14, 24, 43), (122, 219, 249)),
 }
 FRAME_RATE = 8
 
@@ -127,6 +130,13 @@ def _draw_frame(*, width:int,height:int,kind:str,items:list[dict],scene_title:st
     title=(scene_title or "Récit visuel").strip()[:64]
     _fitted(d,title,(margin+mark+round(18*unit),round(title_h*.48),width-margin,round(title_h*.87)),
             strong=False,tint=(214,222,237))
+    if kind in {"cube_rotation","sphere_rotation"}:
+        top=title_h+round(height*.025)
+        bottom=round(height*.70)
+        draw_geometry(d,kind,(margin,top,width-margin,bottom),time_sec,duration,accent)
+        _fitted(d,str(items[0]["text"]),(margin,round(height*.72),width-margin,round(height*.89)),strong=True,tint=(250,251,253))
+        label("SCHÉMA GÉOMÉTRIQUE — NON À L'ÉCHELLE",margin,round(height*.93),max(12,round(15*unit)),accent,False)
+        return im
     boxes=_layout_boxes(width,height,kind,len(items))
     count=len(items)
     for i,(item,box) in enumerate(zip(items,boxes)):
@@ -177,7 +187,7 @@ def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
     items=spec.get("items")
     if kind not in VISUAL_TYPES or not isinstance(items,list) or len(items) not in (1,2,3,4):
         raise ValueError("Spécification de graphique narratif invalide.")
-    if (kind=="focus" and len(items)!=1 or kind in {"comparison","cause_effect"} and len(items)!=2
+    if (kind in {"focus","cube_rotation","sphere_rotation"} and len(items)!=1 or kind in {"comparison","cause_effect"} and len(items)!=2
         or kind in {"steps","timeline"} and len(items)<2):
         raise ValueError("Nombre d'étapes incorrect pour ce type de schéma.")
     if any(not isinstance(item,dict) or not isinstance(item.get("text"),str)

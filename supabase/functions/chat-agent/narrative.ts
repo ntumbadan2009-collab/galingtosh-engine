@@ -89,7 +89,7 @@ export function narrativePreflight(film: any): string[] {
   return problems;
 }
 
-export const MOTION_TYPES = ["focus", "steps", "timeline", "comparison", "cause_effect"] as const;
+export const MOTION_TYPES = ["focus", "steps", "timeline", "comparison", "cause_effect", "cube_rotation", "sphere_rotation"] as const;
 
 const TEMPORAL = /(?:puis|ensuite|après|avant|d'abord|premièrement|secondement|troisièmement|initialement|finalement|au début|à la fin|then|before|after|first|next|finally)|\b(?:19|20)\d{2}\b/iu;
 const CONTRAST = /(?:mais|cependant|pourtant|tandis que|alors que|contrairement|différent|différence|par contre|en revanche|but|while|unlike|versus)/iu;
@@ -105,13 +105,14 @@ export function motionSpecIssues(scene: any, shot: any): string[] {
   if (!MOTION_TYPES.includes(kind) || !Array.isArray(items))
     return ["Type de schéma ou éléments invalides."];
   const count = items.length;
-  if (kind === "cause_effect" && count !== 2 || kind === "focus" && count !== 1 ||
+  if (kind === "cause_effect" && count !== 2 || ["focus","cube_rotation","sphere_rotation"].includes(kind) && count !== 1 ||
       kind === "comparison" && count !== 2 ||
       ["steps", "timeline"].includes(kind) && (count < 2 || count > 4))
     return ["Nombre d'éléments non pris en charge pour ce schéma."];
   const quote = clean(shot?.visualText), narrative = clean(narrativeSource(scene));
   if (!quote || !narrative.includes(quote))
     return ["Le schéma ne reprend pas la narration de la scène."];
+  if (["cube_rotation","sphere_rotation"].includes(kind) && (!(kind==="cube_rotation"?/\bcube\b/iu:/(?:\bsphère\b|\bsphere\b)/iu).test(quote)||!/\b(?:rotation|tourne|tournent|rotates|rotating|spins|spin)\b/iu.test(quote))) return ["La rotation et la forme géométrique doivent être explicitement citées."];
   if (kind === "timeline" && !TEMPORAL.test(quote))
     return ["Une chronologie exige une suite temporelle explicite."];
   if (kind === "comparison" && !CONTRAST.test(quote))

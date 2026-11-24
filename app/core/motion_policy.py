@@ -10,7 +10,9 @@ import re
 import unicodedata
 from typing import Any
 
-KINDS = {"focus", "steps", "timeline", "comparison", "cause_effect"}
+KINDS = {"focus", "steps", "timeline", "comparison", "cause_effect", "cube_rotation", "sphere_rotation"}
+ROTATION = re.compile(r"\b(?:rotation|tourne|tournent|rotates|rotating|spins|spin)\b",re.IGNORECASE)
+SHAPES = {"cube_rotation": re.compile(r"\bcube\b",re.IGNORECASE), "sphere_rotation": re.compile(r"\b(?:sphère|sphere)\b",re.IGNORECASE)}
 CAUSAL = re.compile(r"\b(?:donc|entraîne|provoque|conduit à|en conséquence|therefore|causes|leads to)\b", re.IGNORECASE)
 TEMPORAL = re.compile(
     r"\b(?:puis|ensuite|après|avant|d'abord|premièrement|secondement|"
@@ -41,7 +43,7 @@ def motion_spec_issues(narration: Any, quote: Any, spec: Any) -> list[str]:
     if not isinstance(kind, str) or kind not in KINDS or not isinstance(items, list):
         return ["Type graphique ou liste d'éléments invalide."]
     count = len(items)
-    if ((kind == "focus" and count != 1)
+    if ((kind in {"focus", "cube_rotation", "sphere_rotation"} and count != 1)
         or (kind in {"comparison", "cause_effect"} and count != 2)
         or (kind in {"steps", "timeline"} and not 2 <= count <= 4)):
         return ["Nombre de blocs narratifs non pris en charge."]
@@ -49,6 +51,8 @@ def motion_spec_issues(narration: Any, quote: Any, spec: Any) -> list[str]:
     quoted = _norm(quote)
     if not quoted or quoted not in source:
         return ["L'illustration ne cite pas la narration en cours."]
+    if kind in SHAPES and (not SHAPES[kind].search(quoted) or not ROTATION.search(quoted)):
+        return ["La rotation et la forme géométrique doivent être explicitement citées."]
     if kind == "timeline" and not TEMPORAL.search(quoted):
         return ["La chronologie exige un ordre temporel explicite dans la narration."]
     if kind == "comparison" and not CONTRAST.search(quoted):
