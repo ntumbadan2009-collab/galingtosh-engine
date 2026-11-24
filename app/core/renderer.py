@@ -6,7 +6,7 @@ import logging
 import gc
 import asyncio
 from app.media.editorial_motion import accent_events, render_accents
-from app.core.checkpoints import SceneCheckpoints, fingerprint
+from app.core.checkpoints import SceneCheckpoints, fingerprint, sha256_file
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
@@ -125,7 +125,13 @@ class FilmRenderer:
         segment_durations: list[float] = []
         # Includes final narration alignment and all render settings. Altered
         # scenes, durations or film versions cannot reuse stale segment files.
-        render_signature = fingerprint({"format": 2, "film": film, "resolution": [width, height], "fps": fps})
+        # Bind cache reuse to actual source bytes, not just an unchanged URL.
+        asset_hashes = {}
+        if checkpoints is not None:
+            for ref, path in sorted(media_files.items()):
+                if path.is_file():
+                    asset_hashes[ref] = await asyncio.to_thread(sha256_file, path)
+        render_signature = fingerprint({"format": 3, "film": film, "resolution": [width, height], "fps": fps, "asset_hashes": asset_hashes})
         try:
             _memory("render_start")
             subtitle_path = work / "captions.srt"
