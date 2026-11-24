@@ -3,6 +3,7 @@
 
 import { quotedFromNarration, verifiedVisualEvidence, motionSpecIssues, MOTION_TYPES } from "./narrative.ts";
 import { STYLES } from "./adaptive.ts";
+import {validatePreferences} from "./preferences.ts";
 export type Json = Record<string, any>;
 
 export const ASPECTS: Record<string, [number, number]> = {
@@ -137,6 +138,20 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       if(a.review?.reviewedBy!=="retrieved_text_review_v1"||a.review?.reviewedNarration!==text)fail("La narration a changé depuis le contrôle documentaire.");
       scene.researchEvidence=a.review;
       result={scene_id:scene.id,reviewed:true};
+      break;
+    }
+    // Internal operation: not registered as an autonomous model tool.
+    case "set_creative_preferences": {
+      if(a.enabled===false){
+        delete f.info.creativePreferences;
+        delete f.info.creativePreferencesConsent;
+        result={active:false};
+      }else{
+        if(a.enabled!==true)fail("Consentement explicite requis.");
+        f.info.creativePreferences=validatePreferences(a.preferences);
+        f.info.creativePreferencesConsent=true;
+        result={active:true,preferences:f.info.creativePreferences};
+      }
       break;
     }
     case "set_editorial_profile": {
