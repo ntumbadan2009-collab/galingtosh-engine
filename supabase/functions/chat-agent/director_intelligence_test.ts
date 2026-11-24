@@ -1,4 +1,4 @@
-import {directorDiagnostics,makeDirectorBatches,parseDirectorReview,directorPassed,directorKey,directorReviewState} from "./director_intelligence.ts";
+import {directorDiagnostics,makeDirectorBatches,parseDirectorReview,directorPassed,directorKey,directorReviewState,finalSoundDecision} from "./director_intelligence.ts";
 const assert=(v:unknown,m:string)=>{if(!v)throw Error(m)};
 const throws=(fn:()=>unknown)=>{let ok=false;try{fn()}catch{ok=true}assert(ok,"expected refusal")};
 const makeFilm=()=>({info:{type:"documentary"},scenes:[{id:"s",order:1,durationSec:5,title:"Test",narration:{text:"La Terre apparaît. Puis la nuit tombe."},shots:[{id:"a",order:1,inSec:0,outSec:2,visualMode:"programmatic",visualText:"La Terre apparaît."},{id:"b",order:2,inSec:2,outSec:5,visualMode:"programmatic",visualText:"Puis la nuit tombe."}]}],media:[],audio:{tracks:[]},transitions:[],effects:[],subtitles:[]});
@@ -19,6 +19,7 @@ Deno.test("revision-bound review is invalidated by any edit; reject malformed an
  assert(directorReviewState([],key,batches).status==="not_requested","missing request accepted");
  assert(directorReviewState([requested],key,batches).status==="pending","missing review accepted");
  assert(directorReviewState([requested,review],key,batches).status==="passed","valid review rejected");
+ assert(directorReviewState([requested,review,review],key,batches).status==="invalid","duplicate receipts accepted");
  f.scenes[0].shots[0].outSec=2.1;
  const changed=await directorKey(f,2,3);assert(changed!==key,"content edit didn't invalidate");
  assert(directorReviewState([requested,review],changed,batches).status==="not_requested","stale review accepted");
@@ -33,4 +34,16 @@ Deno.test("every shot is included even in long scenes; neighbors and sound conte
  const batches=makeDirectorBatches(f);
  assert(batches.length===4&&batches.flatMap(x=>x.shotIds).length===42,"shot coverage incomplete");
  assert(batches[2].scene.next.sceneId==="next"&&batches[3].scene.previous.sceneId==="s","neighbor context missing");
+});
+
+Deno.test("final sound review requires actual measured audio; quiet styles are advisory",()=>{
+ const report={audio:true,final_audio_review:{status:"measured",metrics:{integrated_lufs:-16,true_peak_dbtp:-1.5}}};
+ assert(finalSoundDecision(report).passed,"valid measurements rejected");
+ assert(!finalSoundDecision({audio:false}).passed,"missing audio accepted");
+ assert(!finalSoundDecision({...report,final_audio_review:{status:"unavailable"}}).passed,"missing measurement accepted");
+ const peak={...report,final_audio_review:{status:"measured",metrics:{integrated_lufs:-16,true_peak_dbtp:-.4}}};
+ assert(!finalSoundDecision(peak).passed,"unsafe true peak accepted");
+ const quiet={...report,final_audio_review:{status:"measured",metrics:{integrated_lufs:-24,true_peak_dbtp:-3}}};
+ assert(finalSoundDecision(quiet).passed&&finalSoundDecision(quiet).warnings.length===1,"quiet style made a rigid rule");
+ assert(finalSoundDecision(report).semanticAudioReview==="not_performed","invented listening");
 });
