@@ -6,7 +6,7 @@ import { auditGlobalContinuity } from "./global_director.ts";
 import {projectPreferences,PREFERENCE_POLICY} from "./preferences.ts";
 import {finalDeliveryReview} from "./delivery_review.ts";
 import {FOUNDATION_POLICY,auditFoundations} from "./foundations.ts";
-import {DIRECTOR_POLICY,directorDiagnostics,makeDirectorBatches,directorKey,directorReviewState,reviewDirectorBatch} from "./director_intelligence.ts";
+import {DIRECTOR_POLICY,directorDiagnostics,makeDirectorBatches,directorKey,directorReviewState,reviewDirectorBatch,finalSoundDecision} from "./director_intelligence.ts";
 import { summarizeFilm, type Json } from "./film.ts";
 import { narrativePreflight } from "./narrative.ts";
 import { EDITORIAL_DIRECTION, editorialTimelineIssues } from "./editorial.ts";
@@ -87,7 +87,8 @@ export async function productionTick(admin:any,serviceToken:string,system:string
   const cinematic=[4,5].includes(snapshot.data?.info?.editorialLevel);
   const delivery=finalDeliveryReview(r.technical_report,m.target_seconds,cinematic);
   const foundations=auditFoundations(snapshot.data);
-  ok=ok&&delivery.technicalPassed&&(!cinematic||foundations.passed);
+  const soundDecision=finalSoundDecision(r.technical_report);
+  ok=ok&&delivery.technicalPassed&&(!cinematic||(foundations.passed&&soundDecision.passed));
   if(ok&&cinematic){
    const result=await reviewNext(admin,m,r.technical_report);
    if(result==="rejected"){
@@ -102,11 +103,11 @@ export async function productionTick(admin:any,serviceToken:string,system:string
    if(result==="unavailable"){await release(m.retry_count>=3?"needs_review":"waiting_render","cinematic_review_unavailable",30);return {status:"waiting_render"};}
    if(result==="pending"){await release("waiting_render",null,2);return {status:"waiting_render"};}
   }
-  const {error:reportError}=await admin.from("quality_reports").insert({mission_id:m.id,render_job_id:m.render_job_id,check_name:"duration_and_video_metadata",passed:ok,evidence:{...(r.technical_report??{}),delivery,foundations}});
+  const {error:reportError}=await admin.from("quality_reports").insert({mission_id:m.id,render_job_id:m.render_job_id,check_name:"duration_and_video_metadata",passed:ok,evidence:{...(r.technical_report??{}),delivery,foundations,soundDecision}});
   if(reportError){await release("waiting_render","report_unavailable",30);return {status:"waiting_render"};}
-  if(!ok){await release("needs_review","technical_quality_failed");return {status:"needs_review"};}
+  if(!ok){await release("needs_review",cinematic&&!soundDecision.passed?"final_sound_review_failed":"technical_quality_failed");return {status:"needs_review"};}
   try{await release("done");}catch{await release("needs_review","output_not_verified");return {status:"needs_review"};}
-  await admin.from("messages").insert({conversation_id:m.conversation_id,user_id:m.user_id,role:"assistant",content:cinematic?"La production est terminée. Le fichier, la durée et deux images finales par plan ont passé les contrôles disponibles. Le jugement ne couvre pas le mouvement continu ni le sens du son.":"La production est terminée. Le fichier vidéo et sa durée ont été vérifiés. Tu peux regarder le résultat dans ton projet.",metadata:{production_mission_id:m.id,render_job_id:m.render_job_id}});
+  await admin.from("messages").insert({conversation_id:m.conversation_id,user_id:m.user_id,role:"assistant",content:cinematic?"La production est terminée. Le fichier, la durée, les mesures sonores et deux images finales par plan ont passé les contrôles disponibles. Le jugement ne couvre pas le mouvement continu ni le sens du son.":"La production est terminée. Le fichier vidéo et sa durée ont été vérifiés. Tu peux regarder le résultat dans ton projet.",metadata:{production_mission_id:m.id,render_job_id:m.render_job_id}});
   return {status:"done"};
  }
  if(m.step_count>=m.max_steps){await release("needs_review","operation_budget_exhausted");return {status:"needs_review"};}
