@@ -54,11 +54,13 @@ async def main(root:Path):
     output=root/"final.mp4"
     result=await FilmRenderer(max_seconds=150,max_output_mb=45).render(film,files,output)
     assert abs(result["duration_seconds"]-150)<=.4
+    video=next(s for s in (await probe_media(str(output)))["streams"] if s["codec_type"]=="video")
+    assert abs(float(video["duration"])-150)<=.1 and int(video["nb_frames"])==1800
     assert result["audio"] and result["subtitles_burned"] and result["editorial_quality"]["passed"]
     assert result["editorial_quality"]["voice_sources_checked"]==5
     batches=await collect_review_batches(output,film,root/"visual_evidence")
     assert sum(b["count"] for b in batches)==25
-    result["fixture"]={"speech":"offline espeak-ng; not production TTS","visual_semantics":"not model-reviewed","shots":25,"evidence_batches":len(batches)}
+    result["fixture"]={"video_stream_seconds":float(video["duration"]),"video_frame_count":int(video["nb_frames"]),"speech":"offline espeak-ng; not production TTS","visual_semantics":"not model-reviewed","shots":25,"evidence_batches":len(batches)}
     (root/"report.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     print(json.dumps(result,ensure_ascii=False))
 

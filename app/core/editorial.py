@@ -34,8 +34,16 @@ async def inspect_render(path: Path, probe: dict, target: float, expect_voice: b
     tolerance = max(0.4, 4/fps)
     if not math.isfinite(actual) or abs(actual-target)>tolerance:
         issues.append("Durée finale différente de la timeline.")
-    if not any(s.get("codec_type") == "video" for s in streams):
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if video is None:
         issues.append("Piste vidéo absente.")
+    else:
+        try:
+            video_duration=float(video.get("duration") or 0)
+            if not math.isfinite(video_duration) or abs(video_duration-target)>tolerance:
+                issues.append(f"Durée réelle de la piste vidéo {video_duration:.3f}s, cible {target:.3f}s.")
+        except (TypeError,ValueError):
+            issues.append("Durée de piste vidéo non vérifiable.")
     if expect_voice and (not voice_sources or not any(s.get("codec_type") == "audio" for s in streams)):
         issues.append("Narration audio absente.")
 

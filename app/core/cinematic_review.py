@@ -35,7 +35,8 @@ async def collect_review_batches(output: Path, film: dict, directory: Path) -> l
     """Contact sheets use only decoded final frames. No model inference here."""
     plan=review_plan(film)
     probe=await probe_media(str(output))
-    duration=float(probe["format"]["duration"])
+    video=next((s for s in probe.get("streams",[]) if s.get("codec_type")=="video"),{})
+    duration=float(video.get("duration") or 0)
     if not math.isfinite(duration) or duration<=0 or plan[-1]["samplesSec"][-1]>=duration:
         raise ValueError("Timeline finale incompatible avec les images de contrôle.")
     batches=[]
@@ -53,6 +54,13 @@ async def collect_review_batches(output: Path, film: dict, directory: Path) -> l
                     await run_ffmpeg(["-ss",str(t),"-i",str(output),"-frames:v","1",
                         "-vf","scale=480:300:force_original_aspect_ratio=decrease",
                         "-threads","1",str(png)],timeout=30)
+                    if not png.is_file():
+                        # Accurate output seek can recover from a bad seek index.
+                        await run_ffmpeg(["-i",str(output),"-ss",str(t),"-frames:v","1",
+                            "-vf","scale=480:300:force_original_aspect_ratio=decrease",
+                            "-threads","1",str(png)],timeout=90)
+                    if not png.is_file():
+                        raise ValueError(f"Image finale introuvable à {t:.3f}s (plan {shot['shotId']}).")
                     with Image.open(png) as im:
                         x=col*cell_w+(cell_w-im.width)//2
                         y=row*(cell_h+30)+(cell_h-im.height)//2

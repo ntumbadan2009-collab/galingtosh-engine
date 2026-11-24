@@ -30,13 +30,14 @@ def test_scene_narrations_are_independent_and_use_measured_offsets():
 
 @pytest.mark.asyncio
 async def test_scene_tts_synthesizes_one_file_per_scene(tmp_path, monkeypatch):
-    async def fake_synthesize(text, language, voice, destination, preferred_provider="edge-tts"):
+    async def fake_synthesize(text, language, voice, destination, preferred_provider="edge-tts", rate_percent=0, pitch_hz=0):
+        assert (rate_percent,pitch_hz)==((-8,3) if text=="Texte un" else (0,0))
         destination.write_bytes(b"audio")
         return (3.25 if text == "Texte un" else 6.5), "piper"
 
     monkeypatch.setattr("app.media.tts.synthesize_text_with_provider", fake_synthesize)
     film = {"info": {"language": "fr"}, "scenes": [
-        {"id": "one", "order": 1, "narration": {"text": "Texte un"}},
+        {"id": "one", "order": 1, "narration": {"text": "Texte un","ratePercent":-8,"pitchHz":3}},
         {"id": "two", "order": 2, "narration": {"text": "Texte deux"}},
     ]}
     files, durations, warnings = await synthesize_scene_narrations(film, tmp_path)
