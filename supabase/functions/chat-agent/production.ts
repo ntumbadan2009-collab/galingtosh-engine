@@ -45,7 +45,7 @@ export async function approveMission(admin:any,userId:string,conversationId:stri
  await rpc(admin,"approve_production",{p_mission_id:missionId,p_user_id:userId});
  return data;
 }
-const forbidden=new Set(["create_project","undo_last_operation"]);
+const forbidden=new Set(["create_project","undo_last_operation","preview_precision_revision"]);
 export function productionTools(){return TOOLS.filter(t=>!forbidden.has(t.name));}
 export function durationMatches(actual:unknown,target:number){
  return typeof actual==="number"&&Number.isFinite(actual)&&actual>0&&Math.abs(actual-target)<=Math.max(2,target*0.05);
