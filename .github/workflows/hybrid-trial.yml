@@ -1,0 +1,27 @@
+name: Hybrid audiovisual A-B demonstration
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hybrid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - run: python scripts/validate_hybrid_trial.py hybrid-validation
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hybrid-ab-demo
+          path: hybrid-validation/trial/
+          retention-days: 7
