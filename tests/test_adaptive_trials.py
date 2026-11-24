@@ -32,3 +32,7 @@ async def test_actual_alternative_mp4_and_no_fabricated_winner(tmp_path):
     assert result["candidates"][0]["sha256"]!=result["candidates"][1]["sha256"]
     assert all(c["report"]["duration_seconds"]==3 and c["report"]["editorial_quality"]["passed"] for c in result["candidates"])
     assert b==original
+    import json
+    paired=json.loads((tmp_path/"trial"/result["pairedEvidence"][0]["file"]).read_text())
+    assert paired["candidateHashes"]["A"]==result["candidates"][0]["sha256"]
+    assert paired["shots"][0]["shotId"]=="p" and paired["jpegBase64"].startswith("/9j/")

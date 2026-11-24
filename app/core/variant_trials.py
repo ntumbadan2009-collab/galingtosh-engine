@@ -9,6 +9,9 @@ import copy
 import hashlib
 import json
 import math
+import base64
+import io
+from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 from app.core.renderer import FilmRenderer
 from app.core.narrative_policy import narrative_issues
@@ -48,6 +51,38 @@ def validate_trial(a:dict,b:dict)->None:
     if a==b:
         raise ValueError("Deux variantes identiques ne constituent pas un essai.")
 
+def paired_evidence(directory:Path,candidates:list[dict])->list[dict]:
+    """Each contact sheet shows the same shots/time samples, both alternatives."""
+    if len(candidates)!=2 or len(candidates[0]["batches"])!=len(candidates[1]["batches"]):
+        raise ValueError("Couverture comparative incomplète.")
+    font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",20)
+    results=[]
+    for x,y in zip(candidates[0]["batches"],candidates[1]["batches"]):
+        pa=json.loads((directory/x["file"]).read_text())
+        pb=json.loads((directory/y["file"]).read_text())
+        if pa["shots"]!=pb["shots"] or pa["index"]!=pb["index"]:
+            raise ValueError("Les images de comparaison ne couvrent pas le même passage.")
+        with Image.open(io.BytesIO(base64.b64decode(pa["jpegBase64"]))) as a, Image.open(io.BytesIO(base64.b64decode(pb["jpegBase64"]))) as b:
+            if a.size!=b.size:raise ValueError("Dimensions comparatives incohérentes.")
+            # A above B, each row contains the two sampled times of one shot.
+            canvas=Image.new("RGB",(a.width,2*(a.height+32)),(18,22,30))
+            d=ImageDraw.Draw(canvas)
+            d.text((10,3),"VARIANTE A",font=font,fill="white")
+            canvas.paste(a,(0,32))
+            d.text((10,a.height+35),"VARIANTE B",font=font,fill="white")
+            canvas.paste(b,(0,a.height+64))
+            buf=io.BytesIO();canvas.save(buf,"JPEG",quality=82,optimize=True);canvas.close()
+        jpeg=buf.getvalue()
+        if len(jpeg)>500000:raise ValueError("Preuve comparative trop volumineuse.")
+        payload={"version":1,"index":pa["index"],"shots":pa["shots"],
+                 "candidateHashes":{c["id"]:c["sha256"] for c in candidates},
+                 "jpegBase64":base64.b64encode(jpeg).decode("ascii")}
+        path=directory/f"paired_{pa['index']:03d}.json"
+        path.write_text(json.dumps(payload,ensure_ascii=False),encoding="utf-8")
+        results.append({"index":pa["index"],"count":len(pa["shots"]),"file":path.name,
+                        "sha256":hashlib.sha256(path.read_bytes()).hexdigest()})
+    return results
+
 async def render_trial(a:dict,b:dict,media_files:dict[str,Path],directory:Path)->dict:
     validate_trial(a,b)
     directory.mkdir(parents=True,exist_ok=False)
@@ -61,7 +96,7 @@ async def render_trial(a:dict,b:dict,media_files:dict[str,Path],directory:Path)-
         batches=await collect_review_batches(output,local,directory/f"{label}_evidence")
         with output.open("rb") as stream:sha=hashlib.file_digest(stream,"sha256").hexdigest()
         results.append({"id":label,"sha256":sha,"report":report,"batches":[{"index":x["index"],"count":x["count"],"file":str(x["path"].relative_to(directory))} for x in batches]})
-    result={"version":1,"candidates":results,"status":"needs_artistic_review",
+    result={"version":1,"candidates":results,"pairedEvidence":paired_evidence(directory,results),"status":"needs_artistic_review",
             "winner":None,"limitations":"Rendus réels et images échantillonnées; aucune écoute sémantique ni mesure de rétention. Aucune publication automatique."}
     (directory/"comparison.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     return result
