@@ -1,0 +1,50 @@
+name: Isolated cinematic SQL transactions
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  sql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-local-only
+          POSTGRES_DB: cinematic_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: ci-local-only
+      PGDATABASE: cinematic_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load isolated schema and actual project RPC definitions
+        run: |
+          psql -v ON_ERROR_STOP=1 -f tests/sql/schema_fixture.sql
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          s=Path('supabase/migrations/20261117190000_consistent_project_workflow.sql').read_text()
+          out=[]
+          for name in ('save_film_operation','queue_render'):
+              m=re.search(r'create or replace function public\.'+name+r'\(.*?end \$\$;',s,re.S|re.I)
+              if not m: raise SystemExit('missing '+name)
+              out.append(m.group())
+          Path('/tmp/gt_core_rpc.sql').write_text('\n'.join(out))
+          PY
+          psql -v ON_ERROR_STOP=1 -f /tmp/gt_core_rpc.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/orchestrator/001_production_foundation.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/orchestrator/003_cinematic_repair.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/orchestrator/004_cinematic_delivery_gate.sql
+          psql -v ON_ERROR_STOP=1 -f tests/sql/test_cinematic.sql

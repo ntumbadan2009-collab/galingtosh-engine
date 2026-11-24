@@ -27,7 +27,7 @@ begin
  if not found then return null; end if;
  if exists(select 1 from public.render_jobs where project_id=m.project_id and status in ('queued','running')) then return null; end if;
  select data into snapshot from public.films where project_id=m.project_id and user_id=m.user_id and version=r.film_version;
- if not found or snapshot->'info'->>'editorialLevel' not in ('4','5') or snapshot->'info'->>'visualPolicy'<>'strict' then return null; end if;
+ if not found or coalesce(snapshot->'info'->>'editorialLevel','') not in ('4','5') or coalesce(snapshot->'info'->>'visualPolicy','')<>'strict' then return null; end if;
  select * into f from public.films where project_id=m.project_id and user_id=m.user_id order by version desc limit 1 for update;
  if not found or f.data is distinct from snapshot or f.rev<>0 then return null; end if;
  repaired:=snapshot;
@@ -36,7 +36,7 @@ begin
   for pi in 0..jsonb_array_length(sc->'shots')-1 loop
    sh:=sc->'shots'->pi;
    sid:=sh->>'id';
-   if not (sid=any(p_ids)) then continue; end if;
+   if sid is null or not (sid=any(p_ids)) then continue; end if;
    if sid=any(found_ids) or (sh->>'visualMode'='programmatic' and not (sh?'visualSpec')) then return null; end if;
    quote:=case when sh->>'visualMode'='programmatic' then sh->>'visualText' else sh->'visualEvidence'->>'narrationQuote' end;
    narrative:=coalesce(sc->'narration'->>'text',sc->>'narrativeGoal');

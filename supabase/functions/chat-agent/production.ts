@@ -111,6 +111,11 @@ export async function productionTick(admin:any,serviceToken:string,system:string
  // Projects created by the mobile Studio historically have no level marker.
  // Upgrade only a newly approved autonomous mission, not manual projects or
  // in-flight older missions.
+ if(m.step_count>0&&(film.data?.info?.editorialLevel!==5||film.data?.info?.visualPolicy!=="strict")){
+  const {data:activation,error:activationError}=await admin.from("production_tasks").select("status").eq("mission_id",m.id).eq("kind","activate_autonomous_level5").limit(1).maybeSingle();
+  if(activationError){await release("queued","activation_status_unavailable",30);return {status:"queued"};}
+  if(activation){await release("needs_review","level_activation_failed");return {status:"needs_review"};}
+ }
  if(m.step_count===0&&(film.data?.info?.editorialLevel!==5||film.data?.info?.visualPolicy!=="strict")){
   const ctx:Ctx={admin,userId:m.user_id,authToken:serviceToken,conversationId:m.conversation_id,projectId:m.project_id,cfg,usage:{input:0,output:0},productionMissionId:m.id};
   const step=await rpc(admin,"begin_production_step",{...lease,p_kind:"activate_autonomous_level5"});
