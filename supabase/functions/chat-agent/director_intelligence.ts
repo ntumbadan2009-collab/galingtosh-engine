@@ -27,7 +27,8 @@ export function directorDiagnostics(film:any){
 export function makeDirectorBatches(film:any){
  const scenes=ordered(film?.scenes),media=new Map(arr(film?.media).map(x=>[x.id,x]));
  const batches:any[]=[];
- const neighbors=scenes.map(s=>({sceneId:s.id,title:str(s.title,150),narration:str(s.narration?.text,350),mood:s.mood??null}));
+ const edge=(sh:any)=>sh?{id:sh.id,mediaRef:sh.mediaRef??null,visualMode:sh.visualMode,quote:str(sh.visualText??sh.visualEvidence?.narrationQuote,280),camera:sh.camera??null,visualType:sh.visualSpec?.type??null,cardStyle:sh.cardStyle??null}:null;
+ const neighbors=scenes.map(s=>({sceneId:s.id,title:str(s.title,150),narration:str(s.narration?.text,350),mood:s.mood??null,first:edge(ordered(s.shots)[0]),last:edge(ordered(s.shots).at(-1))}));
  let offset=0;
  for(const [i,s] of scenes.entries()){
   const shots=ordered(s.shots);
@@ -35,11 +36,11 @@ export function makeDirectorBatches(film:any){
    const part=shots.slice(j,j+20);
    const ids=part.map(sh=>sh.id),sceneIds=new Set([s.id,...ids]);
    batches.push({index:batches.length,sceneId:s.id,part:j/20,shotIds:ids,shortIds:part.filter(sh=>Number(sh.outSec)-Number(sh.inSec)<3-.001).map(sh=>sh.id),
-    scene:{title:s.title,narration:s.narration?.text??"",mood:s.mood??null,durationSec:s.durationSec,offset,previous:neighbors[i-1]??null,next:neighbors[i+1]??null,previousShot:shots[j-1]?.id??null,nextShot:shots[j+20]?.id??null},
+    format:film.format??null,scene:{title:s.title,narration:s.narration?.text??"",mood:s.mood??null,durationSec:s.durationSec,offset,previous:neighbors[i-1]??null,next:neighbors[i+1]??null,previousShot:edge(shots[j-1]),nextShot:edge(shots[j+20])},
     shots:part.map(sh=>({id:sh.id,inSec:sh.inSec,outSec:sh.outSec,sourceInSec:sh.sourceInSec??null,visualMode:sh.visualMode,mediaKind:media.get(sh.mediaRef)?.kind??null,mediaRef:sh.mediaRef??null,quote:sh.visualText??sh.visualEvidence?.narrationQuote??"",visualSpec:sh.visualSpec??null,visualIntent:sh.visualEvidence?.visualIntent??null,observations:arr(sh.visualEvidence?.samples).map(v=>str(v.description,500)),camera:sh.camera??null,cardStyle:sh.cardStyle??null})),
     transitions:arr(film.transitions).filter(t=>ids.includes(t.atShotId)),
     effects:arr(film.effects).filter(e=>e.target==="film"||sceneIds.has(e.target)),
-    sound:{music:film.audio?.proceduralMusic?.enabled===true?arr(film.audio.proceduralMusic.cues).find(c=>c.sceneId===s.id)??{mood:"default"}:null,accents:film.audio?.editorialAccents??null,tracks:arr(film.audio?.tracks).map(t=>({id:t.id,kind:t.kind,volumeDb:t.volumeDb,events:arr(t.events).filter(e=>Number(e.startSec)<offset+Number(s.durationSec)&&Number(e.startSec)+Number(e.durationSec)>offset)})),voice:s.narration?.voice??null,subtitles:arr(film.subtitles).map(t=>({language:t.language,cues:arr(t.cues).filter(c=>Number(c.startSec)<offset+Number(s.durationSec)&&Number(c.endSec)>offset)}))}});
+    sound:{music:film.audio?.proceduralMusic?.enabled===true?arr(film.audio.proceduralMusic.cues).find(c=>c.sceneId===s.id)??{mood:"default"}:null,accents:film.audio?.editorialAccents??null,tracks:arr(film.audio?.tracks).map(t=>({id:t.id,kind:t.kind,disabled:t.disabled===true,volumeDb:t.volumeDb,events:arr(t.events).filter(e=>Number(e.startSec)<offset+Number(s.durationSec)&&Number(e.startSec)+Number(e.durationSec)>offset)})),voice:s.narration?.voice??null,subtitles:arr(film.subtitles).map(t=>({language:t.language,cues:arr(t.cues).filter(c=>Number(c.startSec)<offset+Number(s.durationSec)&&Number(c.endSec)>offset)}))}});
   }
   offset+=Number(s.durationSec);
  }
@@ -67,7 +68,9 @@ export function directorReviewState(rows:any[],key:string,batches:any[]){
  if(!requested)return {status:"not_requested",next:0,feedback:[]};
  const feedback:any[]=[];let next=0;
  for(const b of batches){
-  const row=matching.find(r=>r.kind==="director_plan_review"&&r.result?.batch===b.index);
+  const candidates=matching.filter(r=>r.kind==="director_plan_review"&&r.result?.batch===b.index);
+  if(candidates.length>1)return {status:"invalid",next:b.index,feedback};
+  const row=candidates[0];
   if(!row)return {status:"pending",next:b.index,feedback};
   try{const verdict=parseDirectorReview(row.result.verdict,b);if(!directorPassed(verdict))feedback.push({batch:b.index,sceneId:b.sceneId,verdict});}catch{return {status:"invalid",next:b.index,feedback};}
   next++;
@@ -82,4 +85,19 @@ export async function reviewDirectorBatch(cfg:LlmCfg,batch:any,goal:string,plan:
  const calls=result.toolCalls.filter(t=>t.name==="submit_director_review");
  if(calls.length!==1||result.toolCalls.length!==1)throw Error("director_review_missing");
  return {verdict:parseDirectorReview(calls[0].args,batch),usage:result.usage};
+}
+
+/** Interpret measured decoded audio conservatively; artistic loudness is not a fixed score. */
+export function finalSoundDecision(report:any){
+ const r=report?.final_audio_review,m=r?.metrics;
+ const finite=(x:any)=>typeof x==="number"&&Number.isFinite(x);
+ const issues:string[]=[];
+ const warnings:string[]=[];
+ if(report?.audio!==true)issues.push("final_voice_audio_missing");
+ if(r?.status!=="measured"||!finite(m?.integrated_lufs)||!finite(m?.true_peak_dbtp))issues.push("final_audio_measurement_unavailable");
+ else{
+  if(m.true_peak_dbtp>-1)issues.push("final_true_peak_too_high");
+  if(m.integrated_lufs< -22||m.integrated_lufs> -12)warnings.push("loudness_outside_review_range");
+ }
+ return {passed:issues.length===0,issues,warnings,semanticAudioReview:"not_performed",metrics:m??null};
 }
