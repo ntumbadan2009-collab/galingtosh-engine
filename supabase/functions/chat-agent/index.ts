@@ -2,7 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, json } from "./cors.ts";
 import { complete, llmConfig, type NMsg } from "./llm.ts";
 import { execTool, TOOLS, type Ctx } from "./tools.ts";
-import { summarizeFilm } from "./film.ts";
+import { summarizeFilm, applyOperation } from "./film.ts";
 import {verifyPrecisionRevision} from "./precision_revision.ts";
 import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
 import {interpretPlanReply} from "./proposal-intents.ts";
@@ -134,6 +134,27 @@ async function handle(req: Request): Promise<Response> {
   const { data: u, error: ue } = await admin.auth.getUser(token);
   if (ue || !u?.user) return json({ error: "Non authentifié" }, 401);
   const userId = u.user.id;
+  // Explicit authenticated preference action, scoped to the user's working film.
+  // No behavioral profiling and no reuse across projects.
+  if(body?.action==="set_creative_preferences"){
+    const {projectId,filmId,version,rev,enabled,preferences}=body;
+    if(![projectId,filmId].every(x=>typeof x==="string"&&UUID.test(x))||
+      !Number.isSafeInteger(version)||!Number.isSafeInteger(rev)||typeof enabled!=="boolean")
+      return json({error:"Préférences invalides."},400);
+    const {data:row,error:loadError}=await admin.from("films").select("id,data,version,rev")
+      .eq("project_id",projectId).eq("user_id",userId).order("version",{ascending:false}).limit(1).maybeSingle();
+    if(loadError||!row||row.id!==filmId||row.version!==version||row.rev!==rev)
+      return json({error:"Version de travail indisponible ou modifiée."},409);
+    try{
+      const {film,result}=applyOperation(row.data,"set_creative_preferences",{enabled,preferences});
+      const {data:saved,error:saveError}=await admin.rpc("save_film_operation",{
+        p_user_id:userId,p_film_id:row.id,p_rev:row.rev,p_data:film,
+        p_op:{name:"set_creative_preferences",args:enabled?{enabled,preferences}:{enabled}}
+      });
+      if(saveError||!saved)return json({error:"Préférences non enregistrées; recharge le projet."},409);
+      return json({ok:true,...result,filmId,version});
+    }catch{return json({error:"Préférences refusées."},400);}
+  }
   // Explicit authenticated client action, not a model-callable mutation.
   if(body?.action==="apply_precision_revision"){
     const {projectId,filmId,version,rev,edits,sourceHash,candidateHash}=body;
