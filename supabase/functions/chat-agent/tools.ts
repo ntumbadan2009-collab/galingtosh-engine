@@ -596,6 +596,12 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           throw new Error(`Le rendu attend une narration ajustée : ${details}. Réécris uniquement les segments concernés avec set_scene_narration, préserve les faits, puis mesure à nouveau. Si le contenu disponible ne permet pas d'allonger la voix sans inventer, ajuste la durée cible de cette scène selon son contenu.`);
         }
         if (measured.length) await mutateFilm(ctx, "align_narration_durations", { segments: measured });
+        if(ctx.productionMissionId){
+          const aligned=await loadWorking(ctx);
+          const f=auditFoundations(aligned.data);
+          const issues=[...f.issues,...narrativePreflight(aligned.data),...researchIssues(aligned.data)];
+          if(issues.length)throw Error("Après alignement réel de la voix : "+issues.slice(0,4).join(" "));
+        }
         const { data: jobId, error } = await ctx.admin.rpc("queue_render", { p_user_id: ctx.userId, p_project_id: ctx.projectId });
         if (error) throw new Error(error.message);
         return {
