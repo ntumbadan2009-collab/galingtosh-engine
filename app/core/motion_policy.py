@@ -65,5 +65,7 @@ def motion_spec_issues(narration: Any, quote: Any, spec: Any) -> list[str]:
         pos = quoted.find(text, cursor)
         if pos < 0:
             return [f"Bloc {i+1} : citation absente ou désordonnée dans le récit."]
+        if kind == "cause_effect" and i == 1 and not CAUSAL.fullmatch(quoted[cursor:pos].strip(" ,;:")):
+            return ["Le connecteur causal doit se trouver exactement entre les deux fragments."]
         cursor = pos + len(text)
     return []

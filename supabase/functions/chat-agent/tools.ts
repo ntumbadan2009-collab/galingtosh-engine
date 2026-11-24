@@ -79,6 +79,7 @@ export const TOOLS: ToolDef[] = [
   tool("remove_audio_track", "Supprime une piste audio.", { track_id: S() }, ["track_id"]),
   tool("update_audio_track", "Corrige localement volume ou placement d'une piste existante, sans modifier les autres pistes.",
     { track_id: S(), volumeDb: N(), events: { type: "array", items: { type: "object", properties: { id: S(), startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } } }, ["track_id"]),
+  tool("set_editorial_accents", "Active ou désactive uniquement les whoosh automatiques synchronisés aux zooms. Respecte la demande de silence ou de montage sans effets sonores, sans retirer les mouvements de caméra.", {enabled:{type:"boolean"}}, ["enabled"]),
   tool("set_procedural_music", "Active ou désactive l'instrumental procédural du film, ou règle son volume global. Désactive pour garder voix et effets sans musique.",
     { enabled: { type: "boolean" }, volumeDb: N() }),
   tool("set_scene_music", "Règle uniquement l'ambiance instrumentale d'une scène. silence la coupe; aucune autre scène n'est modifiée.",
@@ -103,7 +104,7 @@ export const TOOLS: ToolDef[] = [
 const FILM_OPS = new Set([
   "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
   "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "add_code_shot", "turn_shot_into_code", "set_motion_visual", "update_shot", "remove_shot",
-  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_scene_music", "update_subtitles",
+  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_editorial_accents", "set_scene_music", "update_subtitles",
 ]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

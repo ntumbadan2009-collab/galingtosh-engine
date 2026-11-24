@@ -126,6 +126,7 @@ export function motionSpecIssues(scene: any, shot: any): string[] {
     if (text.length < 5 || text.length > 125) return [`Bloc ${i+1} : citation trop courte ou trop longue.`];
     const position=quote.indexOf(text,cursor);
     if (position<0) return [`Bloc ${i+1} : élément absent ou hors ordre de la narration.`];
+    if (kind === "cause_effect" && i===1 && !/^(?:donc|entraîne|provoque|conduit à|en conséquence|therefore|causes|leads to)$/iu.test(quote.slice(cursor,position).replace(/^[ ,;:]+|[ ,;:]+$/g,""))) return ["Le connecteur causal doit se trouver exactement entre les deux fragments."];
     cursor=position+text.length;
   }
   return [];

@@ -461,6 +461,12 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       }
       break;
     }
+    case "set_editorial_accents": {
+      if (typeof a.enabled !== "boolean") fail("enabled doit être booléen");
+      f.audio.editorialAccents = a.enabled;
+      result = { enabled: a.enabled };
+      break;
+    }
     case "set_procedural_music": {
       const music = f.audio.proceduralMusic ?? { enabled: false, volumeDb: -15, cues: [] };
       if (a.enabled !== undefined) {
