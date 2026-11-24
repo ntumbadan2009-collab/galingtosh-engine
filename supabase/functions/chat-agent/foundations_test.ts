@@ -1,4 +1,4 @@
-import {auditFoundations} from "./foundations.ts";
+import {auditFoundations,longShotSupported} from "./foundations.ts";
 const assert=(v:unknown,m:string)=>{if(!v)throw Error(m)};
 function film(){
  const text="La Terre apparaît au-dessus de la Lune.";
@@ -14,4 +14,27 @@ Deno.test("allows abstract code-only scene in hybrid film but refuses a timeline
  const hybrid={...f,scenes:[...f.scenes,abstract]};
  assert(auditFoundations(hybrid).passed,"artificial per-scene media quota");
  abstract.shots[0].inSec=1;assert(!auditFoundations(hybrid).passed,"timeline gap accepted");
+});
+
+Deno.test("five seconds is the default; longer partial-scene shots require timing evidence",()=>{
+ const f=film(),s=f.scenes[0],sh=s.shots[0],asset=f.media[0];
+ s.durationSec=9;sh.outSec=9;
+ assert(longShotSupported(s,sh,asset),"whole-scene image with exact full narration should be allowed");
+ s.narration.text+=" Puis la capsule atterrit.";
+ assert(!longShotSupported(s,sh,asset),"partial quote cannot justify long shot");
+ sh.outSec=5;assert(longShotSupported(s,sh,asset),"five-second threshold");
+ sh.outSec=5.01;assert(!longShotSupported(s,sh,asset),"threshold exceeded");
+});
+Deno.test("long video needs real evidence spanning the entire shot, not clustered frames",()=>{
+ const f=film(),s=f.scenes[0],sh=s.shots[0],asset={...f.media[0],kind:"video"};
+ s.durationSec=9;sh.outSec=9;
+ const v={...sh,sourceInSec:10,visualEvidence:{...sh.visualEvidence,sourceInSec:10,samples:[11,14.5,18].map(atSec=>({...sh.visualEvidence.samples[0],atSec}))}};
+ assert(longShotSupported({...s,shots:[v]},v,asset),"distributed actual samples rejected");
+ v.visualEvidence.samples=[11,12,13].map(atSec=>({...sh.visualEvidence.samples[0],atSec}));
+ assert(!longShotSupported({...s,shots:[v]},v,asset),"clustered samples accepted");
+});
+Deno.test("long code illustration must cover the entire narrated scene",()=>{
+ const s={durationSec:8,narration:{text:"La gravité attire la matière."},shots:[{id:"code",inSec:0,outSec:8,visualMode:"programmatic",visualText:"La gravité attire la matière."}]};
+ assert(longShotSupported(s,s.shots[0],null),"whole scene explanatory visual rejected");
+ s.shots[0].visualText="La gravité";assert(!longShotSupported(s,s.shots[0],null),"incomplete quote accepted");
 });
