@@ -446,6 +446,28 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       result = { track_id: t.id };
       break;
     }
+    case "attach_verified_sound": {
+      const {scene,shot}=findShot(f,req(a,"shot_id"));
+      const e=a.evidence;
+      if(!e||e.verifiedBy!=="gemini_audio_observation_v1"||e.actualAudioAnalysis!==true||e.match!=="pass"||
+          e.containsSpeech!==false||e.containsMusic!==false||!(/^[0-9a-f]{64}$/).test(e.sourceSha256??"")||
+          e.shotId!==shot.id||e.mediaRef!==a.media?.id||a.media?.kind!=="audio"||a.media?.source!=="search")
+        fail("Preuve sonore invalide.");
+      if(!quotedFromNarration(scene,e.narrationQuote))fail("Citation du son absente de la narration.");
+      const visualQuote=shot.visualMode==="programmatic"?shot.visualText:shot.visualEvidence?.narrationQuote;
+      if(typeof visualQuote!=="string"||!quotedFromNarration({narration:{text:visualQuote}},e.narrationQuote))fail("Le son doit concerner le plan choisi.");
+      const duration=numIn(e.durationSec,"durationSec",.25,12),offset=numIn(e.offsetSec,"offsetSec",0,16);
+      numIn(e.sourceInSec,"sourceInSec",0,3600);
+      if(offset+duration>Number(shot.outSec)-Number(shot.inSec)+.001)fail("Le son dépasse le plan.");
+      upsertMedia(f,a.media);
+      let base=0;
+      for(const sc of [...f.scenes].sort((x,y)=>(x.order??0)-(y.order??0))){if(sc.id===scene.id)break;base+=Number(sc.durationSec);}
+      const t={id:nid("au"),kind:"sfx",mediaRef:a.media.id,expectedContent:str(e.expectedContent,"expectedContent",300),soundEvidence:e,volumeDb:-10,
+        events:[{id:nid("ev"),startSec:base+Number(shot.inSec)+offset,durationSec:duration}]};
+      f.audio.tracks.push(t);
+      result={track_id:t.id,verified:true};
+      break;
+    }
     case "remove_audio_track": {
       const n = f.audio.tracks.length;
       f.audio.tracks = f.audio.tracks.filter((t: Json) => t.id !== a.track_id);
@@ -457,6 +479,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       if (!t) fail(`Piste audio introuvable : ${a.track_id}`);
       if (a.volumeDb !== undefined) t.volumeDb = numIn(a.volumeDb, "volumeDb", -60, 12);
       if (a.events !== undefined) {
+        if(t.soundEvidence)fail("Pour déplacer un son vérifié, supprime la piste et vérifie à nouveau le plan.");
         if (!Array.isArray(a.events) || a.events.length > 100) fail("events invalide (max 100)");
         t.events = a.events.map((e: Json, i: number) => ({ id: e.id ?? nid("ev"),
           startSec: numIn(e.startSec, `events[${i}].startSec`, 0, 36000),

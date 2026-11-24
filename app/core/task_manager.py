@@ -18,6 +18,7 @@ from app.core.narration import align_scene_narrations
 from app.core.narrative_policy import validate_narrative_policy
 from app.core.editorial_repair import repair_unavailable_media
 from app.core.cinematic_review import collect_review_batches
+from app.media.audio_evidence import prepare_verified_sound
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
 from app.media.tts import synthesize_scene_narrations, synthesize_tts_tracks
@@ -184,6 +185,17 @@ class TaskManager:
                     continue
                 if track.get("kind") != "sfx": continue
                 if track.get("disabled"):
+                    continue
+                if track.get("soundEvidence"):
+                    original=media_files.get(track.get("mediaRef"))
+                    if not original:raise RenderError("Effet sonore vérifié devenu indisponible.")
+                    safe_target=workdir / f"checked_sound_{len(media_files):04d}.wav"
+                    try:
+                        await prepare_verified_sound(film,track,original,safe_target)
+                    except (ValueError,FFmpegError,OSError) as exc:
+                        raise RenderError("Effet sonore vérifié : "+str(exc)) from None
+                    ref=f"__checked_sound_{len(media_files)}"
+                    media_files[ref]=safe_target;track["mediaRef"]=ref
                     continue
                 expected = str(track.get("expectedContent") or "").strip()
                 fallback = workdir / f"generated_sfx_{track.get('id','sound')}.wav"

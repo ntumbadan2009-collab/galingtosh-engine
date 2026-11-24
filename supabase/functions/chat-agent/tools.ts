@@ -2,6 +2,7 @@
 // versionnée (rev) et journalisée dans film_operations (annulation possible).
 import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from "./film.ts";
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
+import { reviewActualSound } from "./sound.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
          MIN_RELEVANCE, MIN_VISUAL_QUALITY } from "./narrative.ts";
@@ -76,6 +77,7 @@ export const TOOLS: ToolDef[] = [
   tool("add_audio_track", "Ajoute une voix off ou une piste procédurale. Pour un effet sfx, donne expectedContent (pas, impact, pluie, vent ou whoosh) et ses événements temporels; le moteur le synthétise en Python, sans banque de sons ni CLAP. Les demandes non prises en charge sont omises avec un avertissement.",
     { kind: E(["voiceover", "dialogue", "sfx"]), mediaRef: S("référence d'un fichier audio du projet pour narration/dialogue; ne pas utiliser pour sfx"), expectedContent: S(), tts: { type: "object", properties: { text: S(), provider: S(), voice: S(), language: S() }, required: ["text"] },
       events: { type: "array", items: { type: "object", properties: { startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } }, volumeDb: N() }, ["kind"]),
+  tool("verify_and_add_sound","Vérifie un vrai effet audio trouvé par search_media puis add_found_media (Wikimedia/Openverse original CC0 ou CC BY), écoute l'extrait réel avec le modèle audio, vérifie la pertinence pour un plan et le place uniquement si accepté. Ne jamais utiliser les titres ou tags comme preuve. En cas de refus, chercher un autre son ou synthétiser un effet pris en charge.",{shot_id:S(),media_asset_id:S(),expectedContent:S(),narrationQuote:S(),sourceInSec:N(),durationSec:N(),offsetSec:N()},["shot_id","media_asset_id","expectedContent","narrationQuote","durationSec"]),
   tool("remove_audio_track", "Supprime une piste audio.", { track_id: S() }, ["track_id"]),
   tool("update_audio_track", "Corrige localement volume ou placement d'une piste existante, sans modifier les autres pistes.",
     { track_id: S(), volumeDb: N(), events: { type: "array", items: { type: "object", properties: { id: S(), startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } } }, ["track_id"]),
@@ -491,6 +493,37 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         return {output:{...saved,verified:true,shot_id:shot.id,
           evidenceLevel:row.kind==="video"?"three_reviewed_real_frames":"reviewed_real_image",
           inspectedFrameCount:samples.length,minimumRelevance:Math.min(...samples.map(v=>v.relevance))}};
+      }
+      case "verify_and_add_sound": {
+        const working=await loadWorking(ctx);
+        if(![4,5].includes(working.data.info?.editorialLevel))throw Error("Contrôle sonore réservé aux niveaux 4 et 5.");
+        const scene=(working.data.scenes??[]).find((s:Json)=>(s.shots??[]).some((p:Json)=>p.id===args.shot_id));
+        const shot=scene?.shots?.find((p:Json)=>p.id===args.shot_id);
+        const quote=typeof args.narrationQuote==="string"?args.narrationQuote.trim():"";
+        const expected=typeof args.expectedContent==="string"?args.expectedContent.trim():"";
+        const visualQuote=shot?.visualMode==="programmatic"?shot?.visualText:shot?.visualEvidence?.narrationQuote;
+        if(!shot||!quotedFromNarration(scene,quote)||!quotedFromNarration({narration:{text:visualQuote}},quote)||!expected||expected.length>300)throw Error("Effet sans ancrage narratif exact.");
+        const duration=Number(args.durationSec),start=Number(args.sourceInSec??0),offset=Number(args.offsetSec??0);
+        if(![duration,start,offset].every(Number.isFinite)||duration<.25||duration>12||start<0||start>3600||offset<0||offset+duration>Number(shot.outSec)-Number(shot.inSec)+.001)throw Error("Placement sonore invalide.");
+        const row=await loadAsset(ctx,args.media_asset_id);
+        if(row.kind!=="audio"||row.source!=="search")throw Error("Utilise un son public original recherché.");
+        const engine=(Deno.env.get("RENDER_ENGINE_URL")??"https://galingtosh-engine.onrender.com").replace(/\/$/,"");
+        const response=await fetch(engine+"/media/audio-evidence",{
+          method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ctx.authToken,...(ctx.productionMissionId?{"X-Production-Mission":ctx.productionMissionId}:{})},
+          body:JSON.stringify({project_id:ctx.projectId,user_id:ctx.userId,media_id:row.id,source_in_sec:start,duration_sec:duration}),signal:AbortSignal.timeout(60000)});
+        if(!response.ok)throw Error("Fichier sonore ou licence non contrôlable.");
+        const data=await response.json();
+        if(data.mediaId!==row.id||data.mimeType!=="audio/wav"||data.sourceInSec!==start||data.durationSec!==duration||
+           !(/^[0-9a-f]{64}$/).test(data.sourceSha256??""))throw Error("Preuve audio invalide.");
+        const heard=await reviewActualSound(ctx.cfg,data.audioBase64,quote,expected);
+        ctx.usage.input+=heard.usage.input;ctx.usage.output+=heard.usage.output;
+        if(heard.verdict.match!=="pass"||heard.verdict.containsSpeech||heard.verdict.containsMusic)
+          return {output:{verified:false,observation:heard.verdict.observation,reason:"Son non pertinent, ambigu ou contenant une voix/musique."},isError:true};
+        const evidence={verifiedBy:"gemini_audio_observation_v1",actualAudioAnalysis:true,model:heard.model,
+          ...heard.verdict,mediaRef:row.id,shotId:shot.id,sourceSha256:data.sourceSha256,sourceInSec:start,
+          durationSec:duration,offsetSec:offset,narrationQuote:quote,expectedContent:expected};
+        const saved=await mutateFilm(ctx,"attach_verified_sound",{shot_id:shot.id,media:mediaRefFromRow(row),evidence});
+        return {output:{...saved,observation:heard.verdict.observation,verified:true}};
       }
       case "analyze_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
