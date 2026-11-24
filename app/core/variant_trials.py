@@ -94,6 +94,12 @@ async def render_trial(a:dict,b:dict,media_files:dict[str,Path],directory:Path)-
     for label,film in (("A",a),("B",b)):
         output=directory/f"{label}.mp4"
         local=copy.deepcopy(film)
+        # Preserve the exact scene plan that is sent to the renderer, not a later
+        # editable draft or model-authored replacement. Private artifact only.
+        plan_bytes=json.dumps(local,ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False).encode("utf-8")
+        plan_path=directory/f"{label}.film.json"
+        with plan_path.open("xb") as stream:stream.write(plan_bytes)
+        plan_sha=hashlib.sha256(plan_bytes).hexdigest()
         report=await FilmRenderer(max_seconds=24,max_output_mb=20).render(local,dict(media_files),output)
         if not report["editorial_quality"]["passed"]:
             raise ValueError("Échec technique de variante.")
@@ -106,7 +112,7 @@ async def render_trial(a:dict,b:dict,media_files:dict[str,Path],directory:Path)-
             try:
                 with pcm.open("rb") as stream:audio_sha=hashlib.file_digest(stream,"sha256").hexdigest()
             finally:pcm.unlink(missing_ok=True)
-        results.append({"id":label,"sha256":sha,"audioSha256":audio_sha,"report":report,"batches":[{"index":x["index"],"count":x["count"],"file":str(x["path"].relative_to(directory))} for x in batches]})
+        results.append({"id":label,"sha256":sha,"filmSha256":plan_sha,"audioSha256":audio_sha,"report":report,"batches":[{"index":x["index"],"count":x["count"],"file":str(x["path"].relative_to(directory))} for x in batches]})
     if results[0]["audioSha256"]!=results[1]["audioSha256"]:
         raise ValueError("Les pistes audio décodées diffèrent : aucune comparaison visuelle équitable.")
     result={"version":1,"candidates":results,"pairedEvidence":paired_evidence(directory,results),"status":"needs_artistic_review",
