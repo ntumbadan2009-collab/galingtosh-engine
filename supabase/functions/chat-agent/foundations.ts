@@ -17,8 +17,9 @@ export function auditFoundations(film:any){
   }
   sceneChoices.push({sceneId:s.id,verifiedRealShots:sceneReal,codeShots:sceneCode,review:sceneReal===0?"Examiner les possibilités de médias réels pertinents; un schéma seul peut être justifié pour une scène abstraite.":"Vérifier la cohérence avec les scènes voisines."});
  }
+ if(unverified)issues.push("Des plans réels ne disposent pas encore de preuve visuelle valide.");
  if(!real)issues.push("Production complète : au moins un plan photo ou vidéo réel, effectivement attaché et vérifié, est indispensable. Recherche un média pertinent; aucun quota par scène.");
  const continuity=auditGlobalContinuity(film);
- if(continuity.flags.some(f=>f.severity==="check"))issues.push("Corriger les incohérences structurelles de la timeline signalées par le réalisateur global.");
+ if(continuity.flags.some(f=>f.severity==="check")||continuity.flagsTruncated)issues.push("Corriger les incohérences structurelles de la timeline signalées par le réalisateur global.");
  return {passed:issues.length===0,issues,verifiedRealShots:real,codeShots:code,unverifiedShots:unverified,sceneChoices:sceneChoices.slice(0,60),continuityFlags:continuity.flags,limitations:"Contrôle du plan; aucune mesure de cohérence esthétique ni écoute sémantique."};
 }
