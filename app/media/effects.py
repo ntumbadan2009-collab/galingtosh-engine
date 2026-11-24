@@ -3,6 +3,7 @@ import math
 from pathlib import Path
 from typing import Any
 from app.media.ffmpeg import run_ffmpeg
+from app.media.subtitles import subtitle_font_size
 
 _ALLOWED={"fade_in","fade_out","grayscale","vignette","text_overlay"}
 
@@ -56,11 +57,11 @@ def build_video_filters(effects:list[dict[str,Any]],duration:float,width:int,hei
             warnings.append(f"Paramètres invalides pour l’effet « {kind} » : ignoré.")
     return filters,warnings
 
-async def finish_video(source:Path,destination:Path,filters:list[str],subtitle_file:Path|None=None)->None:
+async def finish_video(source:Path,destination:Path,filters:list[str],subtitle_file:Path|None=None,*,width:int=1280,height:int=720)->None:
     applied=list(filters)
     if subtitle_file and subtitle_file.is_file():
         path=str(subtitle_file.resolve()).replace("\\","/").replace(":","\\:")
-        applied.append(f"subtitles='{path}':force_style='FontName=DejaVu Sans,FontSize=24,Outline=2,Shadow=1,MarginV=36'")
+        applied.append(f"subtitles='{path}':force_style='FontName=DejaVu Sans,FontSize={subtitle_font_size(width,height)},Outline=1.5,Shadow=0,MarginV=12,Alignment=2,WrapStyle=2'")
     if not applied:
         source.replace(destination); return
     await run_ffmpeg(["-i",str(source),"-vf",",".join(applied),"-map","0:v:0","-map","0:a?",

@@ -89,7 +89,7 @@ export function narrativePreflight(film: any): string[] {
   return problems;
 }
 
-export const MOTION_TYPES = ["focus", "steps", "timeline", "comparison"] as const;
+export const MOTION_TYPES = ["focus", "steps", "timeline", "comparison", "cause_effect", "cube_rotation", "sphere_rotation"] as const;
 
 const TEMPORAL = /(?:puis|ensuite|après|avant|d'abord|premièrement|secondement|troisièmement|initialement|finalement|au début|à la fin|then|before|after|first|next|finally)|\b(?:19|20)\d{2}\b/iu;
 const CONTRAST = /(?:mais|cependant|pourtant|tandis que|alors que|contrairement|différent|différence|par contre|en revanche|but|while|unlike|versus)/iu;
@@ -105,17 +105,19 @@ export function motionSpecIssues(scene: any, shot: any): string[] {
   if (!MOTION_TYPES.includes(kind) || !Array.isArray(items))
     return ["Type de schéma ou éléments invalides."];
   const count = items.length;
-  if (kind === "focus" && count !== 1 ||
+  if (kind === "cause_effect" && count !== 2 || ["focus","cube_rotation","sphere_rotation"].includes(kind) && count !== 1 ||
       kind === "comparison" && count !== 2 ||
       ["steps", "timeline"].includes(kind) && (count < 2 || count > 4))
     return ["Nombre d'éléments non pris en charge pour ce schéma."];
   const quote = clean(shot?.visualText), narrative = clean(narrativeSource(scene));
   if (!quote || !narrative.includes(quote))
     return ["Le schéma ne reprend pas la narration de la scène."];
+  if (["cube_rotation","sphere_rotation"].includes(kind) && (!(kind==="cube_rotation"?/\bcube\b/iu:/(?:\bsphère\b|\bsphere\b)/iu).test(quote)||!/\b(?:rotation|tourne|tournent|rotates|rotating|spins|spin)\b/iu.test(quote))) return ["La rotation et la forme géométrique doivent être explicitement citées."];
   if (kind === "timeline" && !TEMPORAL.test(quote))
     return ["Une chronologie exige une suite temporelle explicite."];
   if (kind === "comparison" && !CONTRAST.test(quote))
     return ["Une comparaison exige un contraste explicite dans le récit."];
+  if (kind === "cause_effect" && !/\b(?:donc|entraîne|provoque|conduit à|en conséquence|therefore|causes|leads to)\b/iu.test(quote)) return ["La causalité doit être explicitement narrée dans cet ordre."];
   let cursor=0;
   for (let i=0;i<count;i++) {
     const item=items[i];
@@ -125,6 +127,7 @@ export function motionSpecIssues(scene: any, shot: any): string[] {
     if (text.length < 5 || text.length > 125) return [`Bloc ${i+1} : citation trop courte ou trop longue.`];
     const position=quote.indexOf(text,cursor);
     if (position<0) return [`Bloc ${i+1} : élément absent ou hors ordre de la narration.`];
+    if (kind === "cause_effect" && i===1 && !/^(?:donc|entraîne|provoque|conduit à|en conséquence|therefore|causes|leads to)$/iu.test(quote.slice(cursor,position).replace(/^[ ,;:]+|[ ,;:]+$/g,""))) return ["Le connecteur causal doit se trouver exactement entre les deux fragments."];
     cursor=position+text.length;
   }
   return [];

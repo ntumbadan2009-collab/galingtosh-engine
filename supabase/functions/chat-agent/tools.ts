@@ -2,6 +2,10 @@
 // versionnée (rev) et journalisée dans film_operations (annulation possible).
 import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from "./film.ts";
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
+import { reviewActualSound } from "./sound.ts";
+import { STYLES,auditRhythm } from "./adaptive.ts";
+import {previewPrecisionRevision} from "./precision_revision.ts";
+import { reviewDocumentary, researchIssues } from "./research.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
          MIN_RELEVANCE, MIN_VISUAL_QUALITY } from "./narrative.ts";
@@ -31,6 +35,9 @@ const tool = (name: string, description: string, properties: Json = {}, required
 export const TOOLS: ToolDef[] = [
   tool("create_project", "Crée un projet et son Film JSON vide, uniquement quand l'utilisateur demande clairement de commencer/enregistrer une production ou qu'une création est nécessaire pour exécuter sa demande. Ne pas appeler pour un salut, une question générale ou une simple exploration d'idée.",
     { title: S(), type: E(FILM_TYPES), language: S("code langue, ex. fr"), synopsis: S() }, ["title", "type"]),
+  tool("audit_editorial_rhythm","Mesure la diversité et les répétitions du montage planifié. Les constats sont des pistes de révision, pas des quotas ni des scores artistiques."),
+  tool("set_editorial_profile","Enregistre le style éditorial uniquement si demandé ou clairement approuvé par l’utilisateur.",{style:E([...STYLES])},["style"]),
+  tool("preview_precision_revision","Prépare une révision locale de 1 à 4 schémas existants sans enregistrer ni rendre la vidéo. Réservé à une demande ciblée; les citations, le son, les durées et tous les autres plans sont conservés.",{edits:{type:"array",items:{type:"object",properties:{shot_id:S(),visualType:E([...MOTION_TYPES]),visualItems:{type:"array",items:S()}},required:["shot_id","visualType","visualItems"]}}},["edits"]),
   tool("get_film", "Retourne le Film JSON complet de la version de travail."),
   tool("set_project_info", "Modifie titre, type, langue ou synopsis.",
     { title: S(), type: E(FILM_TYPES), language: S(), synopsis: S() }),
@@ -46,12 +53,12 @@ export const TOOLS: ToolDef[] = [
   tool("update_scene", "Modifie une scène existante (champs partiels).",
     { scene_id: S(), title: S(), narrativeGoal: S(), durationSec: N(), mood: S(), characters: { type: "array", items: S() } }, ["scene_id"]),
   tool("set_scene_narration", "Écrit ou révise la narration d'une scène précise. Le texte est synthétisé séparément et commence au début de cette scène; il ne déborde pas dans la suivante. targetDurationSec indique la durée visée par l'IA après mesure TTS.",
-    { scene_id: S(), text: S("narration factuelle de cette scène, maximum 4000 caractères"), targetDurationSec: N("durée visée en secondes; par défaut la durée actuelle de la scène"), language: S(), voice: S() }, ["scene_id", "text"]),
+    { scene_id: S(), text: S("narration factuelle de cette scène, maximum 4000 caractères"), targetDurationSec: N("durée visée en secondes; par défaut la durée actuelle de la scène"), language: S(), voice: S(),ratePercent:N("Débit vocal entier, de -20 à +20 pour cent"),pitchHz:N("Hauteur vocale entière de -12 à +12 Hz") }, ["scene_id", "text"]),
   tool("measure_narration", "Synthétise provisoirement chaque narration de scène et renvoie sa durée TTS réelle sans modifier le film. Obligatoire avant le rendu; révise les textes dont la durée s'écarte de la cible, puis remesure.", {}),
   tool("remove_scene", "Supprime une scène et ses plans.", { scene_id: S() }, ["scene_id"]),
   tool("reorder_scenes", "Réordonne les scènes : fournir TOUS les ids dans le nouvel ordre.", { scene_ids: { type: "array", items: S() } }, ["scene_ids"]),
   tool("plan_scene_beats", "Découpe le récit réel d'une scène en phrases illustrables avec minutage. Chaque extrait est une citation EXACTE du texte, jamais des faits inventés. Utilise ces intervalles pour créer plusieurs plans visuellement pertinents.", { scene_id: S() }, ["scene_id"]),
-  tool("add_code_shot", "Crée sans image/vidéo externe un plan narratif par Python/FFmpeg (12 s max). visualText cite exactement une séquence du récit. RECOMMANDÉ niveau 2 : visualType=focus (mise en valeur), steps (schéma à étapes), timeline (chronologie explicite), comparison (contraste explicite) et visualItems=fragments exacts de visualText, dans leur ordre. Les éléments s'animent progressivement. Ne fabrique pas de données ni de conclusions graphiques.",
+  tool("add_code_shot", "Crée sans image/vidéo externe un plan narratif par Python/FFmpeg (12 s max). visualText cite exactement une séquence du récit. RECOMMANDÉ niveau 2 : visualType=focus (mise en valeur), steps (schéma à étapes), timeline (chronologie explicite), comparison (contraste explicite) et visualItems=fragments exacts de visualText, dans leur ordre. Les éléments s'animent progressivement. cube_rotation ou sphere_rotation affichent une rotation 3D schématique seulement si la forme et le mouvement sont explicitement décrits dans la citation. Ne fabrique pas de données ni de conclusions graphiques.",
     { scene_id:S(), visualText:S("citation EXACTE de la narration, maximum 280 caractères"),
       cardStyle:E(["focus","question","contrast","process"]), visualType:E([...MOTION_TYPES]),
       visualItems:{type:"array",items:S("extrait textuel EXACT du visualText, maximum 125 caractères")},
@@ -76,9 +83,12 @@ export const TOOLS: ToolDef[] = [
   tool("add_audio_track", "Ajoute une voix off ou une piste procédurale. Pour un effet sfx, donne expectedContent (pas, impact, pluie, vent ou whoosh) et ses événements temporels; le moteur le synthétise en Python, sans banque de sons ni CLAP. Les demandes non prises en charge sont omises avec un avertissement.",
     { kind: E(["voiceover", "dialogue", "sfx"]), mediaRef: S("référence d'un fichier audio du projet pour narration/dialogue; ne pas utiliser pour sfx"), expectedContent: S(), tts: { type: "object", properties: { text: S(), provider: S(), voice: S(), language: S() }, required: ["text"] },
       events: { type: "array", items: { type: "object", properties: { startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } }, volumeDb: N() }, ["kind"]),
+  tool("review_documentary_scene","Contrôle les affirmations factuelles d’une scène documentaire/éducative avec de véritables extraits récupérés de Wikipédia, Crossref et Europe PMC. Réécris les affirmations insuffisamment étayées; ne prétends pas qu’elles sont vérifiées. Donne query dans la langue du film et englishQuery pour les publications.",{scene_id:S(),query:S(),englishQuery:S()},["scene_id","query"]),
+  tool("verify_and_add_sound","Vérifie un vrai effet audio trouvé par search_media puis add_found_media (Wikimedia/Openverse original CC0 ou CC BY), écoute l'extrait réel avec le modèle audio, vérifie la pertinence pour un plan et le place uniquement si accepté. Ne jamais utiliser les titres ou tags comme preuve. En cas de refus, chercher un autre son ou synthétiser un effet pris en charge.",{shot_id:S(),media_asset_id:S(),expectedContent:S(),narrationQuote:S(),sourceInSec:N(),durationSec:N(),offsetSec:N()},["shot_id","media_asset_id","expectedContent","narrationQuote","durationSec"]),
   tool("remove_audio_track", "Supprime une piste audio.", { track_id: S() }, ["track_id"]),
   tool("update_audio_track", "Corrige localement volume ou placement d'une piste existante, sans modifier les autres pistes.",
     { track_id: S(), volumeDb: N(), events: { type: "array", items: { type: "object", properties: { id: S(), startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } } }, ["track_id"]),
+  tool("set_editorial_accents", "Active ou désactive uniquement les whoosh automatiques synchronisés aux zooms. Respecte la demande de silence ou de montage sans effets sonores, sans retirer les mouvements de caméra.", {enabled:{type:"boolean"}}, ["enabled"]),
   tool("set_procedural_music", "Active ou désactive l'instrumental procédural du film, ou règle son volume global. Désactive pour garder voix et effets sans musique.",
     { enabled: { type: "boolean" }, volumeDb: N() }),
   tool("set_scene_music", "Règle uniquement l'ambiance instrumentale d'une scène. silence la coupe; aucune autre scène n'est modifiée.",
@@ -101,9 +111,9 @@ export const TOOLS: ToolDef[] = [
 ];
 
 const FILM_OPS = new Set([
-  "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
+  "set_editorial_profile", "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
   "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "add_code_shot", "turn_shot_into_code", "set_motion_visual", "update_shot", "remove_shot",
-  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_scene_music", "update_subtitles",
+  "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_editorial_accents", "set_scene_music", "update_subtitles",
 ]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -155,6 +165,7 @@ async function measureNarrations(ctx: Ctx, film: Json) {
     if (!narration || typeof narration.text !== "string" || !narration.text.trim()) return [];
     return [{ sceneId: String(scene.id), text: narration.text, voice: narration.voice ?? "default",
       language: narration.language ?? film.info?.language ?? "fr",
+      ratePercent:narration.ratePercent??0,pitchHz:narration.pitchHz??0,ttsProvider:narration.ttsProvider??"edge-tts",
       targetDurationSec: narration.targetDurationSec ?? scene.durationSec }];
   });
   if (!segments.length) return [];
@@ -239,6 +250,15 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
     if (FILM_OPS.has(name)) return { output: await mutateFilm(ctx, name, args) };
 
     switch (name) {
+      case "audit_editorial_rhythm": {
+        const row=await loadWorking(ctx);
+        return {output:auditRhythm(row.data)};
+      }
+      case "preview_precision_revision": {
+        const row=await loadWorking(ctx);
+        const p=await previewPrecisionRevision(row.data,args.edits);
+        return {output:{...p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId},metadata:{kind:"precision_revision",receipt:p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId}};
+      }
       case "get_film": {
         const row = await loadWorking(ctx);
         return { output: { version: row.version, rev: row.rev, film: row.data } };
@@ -490,6 +510,47 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           evidenceLevel:row.kind==="video"?"three_reviewed_real_frames":"reviewed_real_image",
           inspectedFrameCount:samples.length,minimumRelevance:Math.min(...samples.map(v=>v.relevance))}};
       }
+      case "review_documentary_scene": {
+        const row=await loadWorking(ctx);
+        const scene=(row.data.scenes??[]).find((s:Json)=>s.id===args.scene_id);
+        const narration=scene?.narration?.text??scene?.narrativeGoal??"";
+        if(!scene||typeof narration!=="string"||!narration.trim())throw Error("Écris la narration avant de rechercher les preuves.");
+        const result=await reviewDocumentary(ctx.cfg,narration,String(args.query??""),String(args.englishQuery??""),String(row.data.info?.language??"fr").split("-")[0]);
+        ctx.usage.input+=result.usage.input;ctx.usage.output+=result.usage.output;
+        const saved=await mutateFilm(ctx,"record_documentary_review",{scene_id:scene.id,review:result.review});
+        return {output:{...saved,review:result.review,passed:result.review.claims.every((c:any)=>c.status==="supported")}};
+      }
+      case "verify_and_add_sound": {
+        const working=await loadWorking(ctx);
+        if(![4,5].includes(working.data.info?.editorialLevel))throw Error("Contrôle sonore réservé aux niveaux 4 et 5.");
+        const scene=(working.data.scenes??[]).find((s:Json)=>(s.shots??[]).some((p:Json)=>p.id===args.shot_id));
+        const shot=scene?.shots?.find((p:Json)=>p.id===args.shot_id);
+        const quote=typeof args.narrationQuote==="string"?args.narrationQuote.trim():"";
+        const expected=typeof args.expectedContent==="string"?args.expectedContent.trim():"";
+        const visualQuote=shot?.visualMode==="programmatic"?shot?.visualText:shot?.visualEvidence?.narrationQuote;
+        if(!shot||!quotedFromNarration(scene,quote)||!quotedFromNarration({narration:{text:visualQuote}},quote)||!expected||expected.length>300)throw Error("Effet sans ancrage narratif exact.");
+        const duration=Number(args.durationSec),start=Number(args.sourceInSec??0),offset=Number(args.offsetSec??0);
+        if(![duration,start,offset].every(Number.isFinite)||duration<.25||duration>12||start<0||start>3600||offset<0||offset+duration>Number(shot.outSec)-Number(shot.inSec)+.001)throw Error("Placement sonore invalide.");
+        const row=await loadAsset(ctx,args.media_asset_id);
+        if(row.kind!=="audio"||row.source!=="search")throw Error("Utilise un son public original recherché.");
+        const engine=(Deno.env.get("RENDER_ENGINE_URL")??"https://galingtosh-engine.onrender.com").replace(/\/$/,"");
+        const response=await fetch(engine+"/media/audio-evidence",{
+          method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ctx.authToken,...(ctx.productionMissionId?{"X-Production-Mission":ctx.productionMissionId}:{})},
+          body:JSON.stringify({project_id:ctx.projectId,user_id:ctx.userId,media_id:row.id,source_in_sec:start,duration_sec:duration}),signal:AbortSignal.timeout(60000)});
+        if(!response.ok)throw Error("Fichier sonore ou licence non contrôlable.");
+        const data=await response.json();
+        if(data.mediaId!==row.id||data.mimeType!=="audio/wav"||data.sourceInSec!==start||data.durationSec!==duration||
+           !(/^[0-9a-f]{64}$/).test(data.sourceSha256??""))throw Error("Preuve audio invalide.");
+        const heard=await reviewActualSound(ctx.cfg,data.audioBase64,quote,expected);
+        ctx.usage.input+=heard.usage.input;ctx.usage.output+=heard.usage.output;
+        if(heard.verdict.match!=="pass"||heard.verdict.containsSpeech||heard.verdict.containsMusic)
+          return {output:{verified:false,observation:heard.verdict.observation,reason:"Son non pertinent, ambigu ou contenant une voix/musique."},isError:true};
+        const evidence={verifiedBy:"gemini_audio_observation_v1",actualAudioAnalysis:true,model:heard.model,
+          ...heard.verdict,mediaRef:row.id,shotId:shot.id,sourceSha256:data.sourceSha256,sourceInSec:start,
+          durationSec:duration,offsetSec:offset,narrationQuote:quote,expectedContent:expected};
+        const saved=await mutateFilm(ctx,"attach_verified_sound",{shot_id:shot.id,media:mediaRefFromRow(row),evidence});
+        return {output:{...saved,observation:heard.verdict.observation,verified:true}};
+      }
       case "analyze_media": {
         const row = await loadAsset(ctx, args.media_asset_id);
         if (row.kind !== "image") throw new Error("L'analyse par vision ne concerne que les images.");
@@ -519,7 +580,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const hasShots = (row.data.scenes ?? []).some((s: Json) => (s.shots ?? []).length > 0);
         if (!hasShots) throw new Error("Le film ne contient aucun plan : rien à rendre.");
         if (ctx.productionMissionId || row.data.info?.visualPolicy === "strict") {
-          const issues=narrativePreflight(row.data);
+          const issues=[...narrativePreflight(row.data),...researchIssues(row.data)];
           if(issues.length)throw Error("Les images doivent illustrer la narration : "+issues.slice(0,4).join(" "));
         }
         const measured = await measureNarrations(ctx, row.data);

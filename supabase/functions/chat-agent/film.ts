@@ -2,6 +2,8 @@
 // L'agent ne modifie jamais le JSON autrement que par applyOperation().
 
 import { quotedFromNarration, verifiedVisualEvidence, motionSpecIssues, MOTION_TYPES } from "./narrative.ts";
+import { STYLES } from "./adaptive.ts";
+import {validatePreferences} from "./preferences.ts";
 export type Json = Record<string, any>;
 
 export const ASPECTS: Record<string, [number, number]> = {
@@ -45,7 +47,7 @@ function str(v: any, k: string, max = 2000): string {
 export function defaultFilm(title: string, type = "custom", language = "fr"): Json {
   const [width, height] = ASPECTS["16:9"];
   return {
-    info: { title, type, language, visualPolicy: "strict" },
+    info: { title, type, language, visualPolicy: "strict", editorialLevel: 5 },
     format: { aspect: "16:9", width, height, fps: 30 },
     scenes: [], characters: [], media: [], audio: { tracks: [] },
     effects: [], transitions: [], subtitles: [],
@@ -124,6 +126,39 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
   let result: Json = {};
 
   switch (name) {
+    case "activate_autonomous_level5": {
+      f.info.visualPolicy="strict";
+      f.info.editorialLevel=5;
+      result={editorialLevel:5,visualPolicy:"strict"};
+      break;
+    }
+    case "record_documentary_review": {
+      const scene=findScene(f,req(a,"scene_id"));
+      const text=scene.narration?.text??scene.narrativeGoal??"";
+      if(a.review?.reviewedBy!=="retrieved_text_review_v1"||a.review?.reviewedNarration!==text)fail("La narration a changé depuis le contrôle documentaire.");
+      scene.researchEvidence=a.review;
+      result={scene_id:scene.id,reviewed:true};
+      break;
+    }
+    // Internal operation: not registered as an autonomous model tool.
+    case "set_creative_preferences": {
+      if(a.enabled===false){
+        delete f.info.creativePreferences;
+        delete f.info.creativePreferencesConsent;
+        result={active:false};
+      }else{
+        if(a.enabled!==true)fail("Consentement explicite requis.");
+        f.info.creativePreferences=validatePreferences(a.preferences);
+        f.info.creativePreferencesConsent=true;
+        result={active:true,preferences:f.info.creativePreferences};
+      }
+      break;
+    }
+    case "set_editorial_profile": {
+      f.info.editorialProfile=oneOf(a.style,"style",[...STYLES]);
+      result={style:f.info.editorialProfile};
+      break;
+    }
     case "set_project_info": {
       if (a.title !== undefined) f.info.title = str(a.title, "title", 200);
       if (a.type !== undefined) f.info.type = oneOf(a.type, "type", FILM_TYPES);
@@ -207,8 +242,12 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         }
         scene.durationSec = targetDurationSec;
       }
+      const ratePercent=numIn(a.ratePercent??scene.narration?.ratePercent??0,"ratePercent",-20,20);
+      const pitchHz=numIn(a.pitchHz??scene.narration?.pitchHz??0,"pitchHz",-12,12);
+      if(!Number.isInteger(ratePercent)||!Number.isInteger(pitchHz))fail("Direction vocale : valeurs entières requises.");
+      if(scene.narration?.text!==text)delete scene.researchEvidence;
       scene.narration = {
-        text,
+        text,ratePercent,pitchHz,
         targetDurationSec,
         language: str(a.language ?? f.info.language ?? "fr", "language", 10),
         voice: str(a.voice ?? "default", "voice", 80),
@@ -261,6 +300,13 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       for (const track of f.subtitles) for (const cue of track.cues ?? []) {
         if (Number.isFinite(Number(cue.startSec))) cue.startSec = Math.max(0, remapTime(Number(cue.startSec)));
         if (Number.isFinite(Number(cue.endSec))) cue.endSec = Math.max(0, remapTime(Number(cue.endSec)));
+      }
+      if ([3,4,5].includes(f.info?.editorialLevel)) for (const track of f.audio?.tracks ?? []) for (const event of track.events ?? []) {
+        const start = Number(event.startSec), end = start + Number(event.durationSec);
+        if (Number.isFinite(start) && Number.isFinite(end)) {
+          event.startSec = Math.max(0, remapTime(start));
+          event.durationSec = Math.max(0.001, remapTime(end)-remapTime(start));
+        }
       }
       result = { aligned_scenes: aligned };
       break;
@@ -436,6 +482,28 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       result = { track_id: t.id };
       break;
     }
+    case "attach_verified_sound": {
+      const {scene,shot}=findShot(f,req(a,"shot_id"));
+      const e=a.evidence;
+      if(!e||e.verifiedBy!=="gemini_audio_observation_v1"||e.actualAudioAnalysis!==true||e.match!=="pass"||
+          e.containsSpeech!==false||e.containsMusic!==false||!(/^[0-9a-f]{64}$/).test(e.sourceSha256??"")||
+          e.shotId!==shot.id||e.mediaRef!==a.media?.id||a.media?.kind!=="audio"||a.media?.source!=="search")
+        fail("Preuve sonore invalide.");
+      if(!quotedFromNarration(scene,e.narrationQuote))fail("Citation du son absente de la narration.");
+      const visualQuote=shot.visualMode==="programmatic"?shot.visualText:shot.visualEvidence?.narrationQuote;
+      if(typeof visualQuote!=="string"||!quotedFromNarration({narration:{text:visualQuote}},e.narrationQuote))fail("Le son doit concerner le plan choisi.");
+      const duration=numIn(e.durationSec,"durationSec",.25,12),offset=numIn(e.offsetSec,"offsetSec",0,16);
+      numIn(e.sourceInSec,"sourceInSec",0,3600);
+      if(offset+duration>Number(shot.outSec)-Number(shot.inSec)+.001)fail("Le son dépasse le plan.");
+      upsertMedia(f,a.media);
+      let base=0;
+      for(const sc of [...f.scenes].sort((x,y)=>(x.order??0)-(y.order??0))){if(sc.id===scene.id)break;base+=Number(sc.durationSec);}
+      const t={id:nid("au"),kind:"sfx",mediaRef:a.media.id,expectedContent:str(e.expectedContent,"expectedContent",300),soundEvidence:e,volumeDb:-10,
+        events:[{id:nid("ev"),startSec:base+Number(shot.inSec)+offset,durationSec:duration}]};
+      f.audio.tracks.push(t);
+      result={track_id:t.id,verified:true};
+      break;
+    }
     case "remove_audio_track": {
       const n = f.audio.tracks.length;
       f.audio.tracks = f.audio.tracks.filter((t: Json) => t.id !== a.track_id);
@@ -447,11 +515,18 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       if (!t) fail(`Piste audio introuvable : ${a.track_id}`);
       if (a.volumeDb !== undefined) t.volumeDb = numIn(a.volumeDb, "volumeDb", -60, 12);
       if (a.events !== undefined) {
+        if(t.soundEvidence)fail("Pour déplacer un son vérifié, supprime la piste et vérifie à nouveau le plan.");
         if (!Array.isArray(a.events) || a.events.length > 100) fail("events invalide (max 100)");
         t.events = a.events.map((e: Json, i: number) => ({ id: e.id ?? nid("ev"),
           startSec: numIn(e.startSec, `events[${i}].startSec`, 0, 36000),
           durationSec: numIn(e.durationSec, `events[${i}].durationSec`, 0.05, 36000) }));
       }
+      break;
+    }
+    case "set_editorial_accents": {
+      if (typeof a.enabled !== "boolean") fail("enabled doit être booléen");
+      f.audio.editorialAccents = a.enabled;
+      result = { enabled: a.enabled };
       break;
     }
     case "set_procedural_music": {

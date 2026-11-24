@@ -2,7 +2,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, json } from "./cors.ts";
 import { complete, llmConfig, type NMsg } from "./llm.ts";
 import { execTool, TOOLS, type Ctx } from "./tools.ts";
-import { summarizeFilm } from "./film.ts";
+import { summarizeFilm, applyOperation } from "./film.ts";
+import {verifyPrecisionRevision} from "./precision_revision.ts";
 import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
 import {interpretPlanReply} from "./proposal-intents.ts";
 
@@ -53,10 +54,10 @@ CRÉATION ET MÉDIAS
 - Tu ne modifies les données du film qu'avec les outils prévus. Pour une modification ciblée (« rends la scène 2 plus dramatique »), ne touche qu'aux éléments concernés.
 - Pour sélectionner un extrait d'une vidéo existante, commence par examiner les passages disponibles avec inspect_video_clips lorsque l'analyse est accessible. Ces intervalles sont calculés à partir des changements visuels : ils NE prouvent PAS le sujet ni l'action montrés. Ne prétends jamais avoir vu ou compris le passage si aucune analyse visuelle réelle n'a été effectuée. Le champ sourceInSec du plan détermine le début dans la vidéo source; inSec et outSec déterminent sa position dans la scène. Ne confonds jamais les deux. Ne choisis pas un extrait au hasard lorsque sa pertinence doit être vérifiée.
 - Galingtosh ne génère pas d'images ni de vidéos par IA. Il peut rechercher des médias existants, analyser les images fournies, utiliser les fichiers importés et composer des images avec les fonctions programmatiques de l'application (mouvements, graphiques, transitions, narration et sous-titres).
-- NIVEAU 2 DES VISUELS : préfère des schémas animés créés par code lorsque les archives ne montrent pas INTUITIVEMENT la narration. L'outil add_code_shot accepte visualType=focus|steps|timeline|comparison et visualItems (citations exactes, ordonnées, de visualText) pour déclencher des révélations graphiques progressives sans aucune génération IA. Timeline UNIQUEMENT si le récit exprime un ordre temporel; comparison UNIQUEMENT s'il exprime un contraste. Aucun tableau chiffré, événement, date, lieu ou causalité ne peut être inventé pour décorer. set_motion_visual permet de perfectionner un plan code déjà ajouté. Un média recherché reste interdit dans un plan autonome tant que la vision réelle n'a pas confirmé sa pertinence.
+- NIVEAU 2 DES VISUELS : préfère des schémas animés créés par code lorsque les archives ne montrent pas INTUITIVEMENT la narration. L'outil add_code_shot accepte visualType=focus|steps|timeline|comparison|cause_effect|cube_rotation|sphere_rotation et visualItems (citations exactes, ordonnées, de visualText) pour déclencher des révélations graphiques progressives sans aucune génération IA. Timeline UNIQUEMENT si le récit exprime un ordre temporel; comparison UNIQUEMENT s'il exprime un contraste. Aucun tableau chiffré, événement, date, lieu ou causalité ne peut être inventé pour décorer. set_motion_visual permet de perfectionner un plan code déjà ajouté. Un média recherché reste interdit dans un plan autonome tant que la vision réelle n'a pas confirmé sa pertinence.
 - Pour le son, supprime toujours la piste audio originale des vidéos sources au montage. La musique de fond doit être produite par le moteur à partir de notes et d'accords procéduraux, scène par scène, avec set_scene_music (calm, hopeful, tense, sad, wonder, neutral, silence). C'est une synthèse Python rendue en audio, pas un fichier MIDI exporté ni un enregistrement d'instruments réels. Garde le niveau discret sous la narration. N'ajoute pas de musique recherchée ou importée.
-- Les effets sonores sont eux aussi synthétisés par le moteur, sans banque externe ni CLAP. Pour add_audio_track de type sfx, utilise uniquement les motifs pris en charge (pas, impact, pluie, vent, whoosh) et indique les événements temporels. Si le son demandé ne peut pas être produit par ces motifs, n'invente pas de résultat : le moteur l'omet avec un avertissement. La narration TTS et les dialogues restent autorisés.
-- La narration est écrite scène par scène avec set_scene_narration. Chaque segment appartient à une seule scène et ne doit jamais chevaucher la scène suivante. Choisis des durées de scène variables selon les images et l'explication; targetDurationSec est une cible, pas une durée uniforme imposée à toutes les scènes.
+- Les effets sonores peuvent provenir d'un véritable extrait audio public CC0/CC BY vérifié par verify_and_add_sound (analyse du son réel et empreinte contrôlée au rendu, lorsque le fournisseur audio est compatible), ou être synthétisés localement. Ne prétends pas disposer d'une banque complète ni d'une écoute si le fournisseur ne la confirme pas. Pour add_audio_track de type sfx, utilise uniquement les motifs pris en charge (pas, impact, pluie, vent, whoosh) et indique les événements temporels. Si le son demandé ne peut pas être produit par ces motifs, n'invente pas de résultat : le moteur l'omet avec un avertissement. La narration TTS et les dialogues restent autorisés.
+- La narration est écrite scène par scène avec set_scene_narration, qui permet un débit et une hauteur bornés. Pour les documentaires, reportages et contenus éducatifs de niveau 5, review_documentary_scene examine les véritables extraits sources; les affirmations insuffisamment étayées doivent être corrigées et revérifiées. Chaque segment appartient à une seule scène et ne doit jamais chevaucher la scène suivante. Choisis des durées de scène variables selon les images et l'explication; targetDurationSec est une cible, pas une durée uniforme imposée à toutes les scènes.
 - Avant request_render, appelle measure_narration pour obtenir les durées réelles du TTS. Si une scène s'écarte de plus d'une seconde ou de 10 % de sa cible, ravise-toi : enrichis ou resserre uniquement son texte à partir des éléments visuels et des faits disponibles, avec set_scene_narration, puis remesure. Fais au plus deux corrections automatiques. N'invente aucun fait pour remplir le temps. Si tu ne peux pas rallonger fidèlement, ajuste la cible de la scène à son contenu; le total peut alors s'écarter de la durée visée et doit être signalé. Le moteur fixe ensuite chaque durée de scène sur la voix réellement produite et cale les plans à cette durée sans accélérer ni couper la narration.
 - Pour les graphiques, exige des données et une source documentée; identifie explicitement toute projection. Si la source ne peut être vérifiée, n'affiche pas le graphique comme un fait établi.
 - Ne prétends pas qu'une recherche a réussi sans résultats. Ne dis jamais qu'un média est « libre de droits » : ne rapporte que la licence, l'auteur, la source et les restrictions effectivement renvoyés par les outils. Si ces informations manquent, dis que les droits restent à vérifier.
@@ -133,6 +134,53 @@ async function handle(req: Request): Promise<Response> {
   const { data: u, error: ue } = await admin.auth.getUser(token);
   if (ue || !u?.user) return json({ error: "Non authentifié" }, 401);
   const userId = u.user.id;
+  // Explicit authenticated preference action, scoped to the user's working film.
+  // No behavioral profiling and no reuse across projects.
+  if(body?.action==="set_creative_preferences"){
+    const {projectId,filmId,version,rev,enabled,preferences}=body;
+    if(![projectId,filmId].every(x=>typeof x==="string"&&UUID.test(x))||
+      !Number.isSafeInteger(version)||!Number.isSafeInteger(rev)||typeof enabled!=="boolean")
+      return json({error:"Préférences invalides."},400);
+    const {data:row,error:loadError}=await admin.from("films").select("id,data,version,rev")
+      .eq("project_id",projectId).eq("user_id",userId).order("version",{ascending:false}).limit(1).maybeSingle();
+    if(loadError||!row||row.id!==filmId||row.version!==version||row.rev!==rev)
+      return json({error:"Version de travail indisponible ou modifiée."},409);
+    try{
+      const {film,result}=applyOperation(row.data,"set_creative_preferences",{enabled,preferences});
+      const {data:saved,error:saveError}=await admin.rpc("save_film_operation",{
+        p_user_id:userId,p_film_id:row.id,p_rev:row.rev,p_data:film,
+        p_op:{name:"set_creative_preferences",args:enabled?{enabled,preferences}:{enabled}}
+      });
+      if(saveError||!saved)return json({error:"Préférences non enregistrées; recharge le projet."},409);
+      return json({ok:true,...result,filmId,version});
+    }catch{return json({error:"Préférences refusées."},400);}
+  }
+  // Explicit authenticated client action, not a model-callable mutation.
+  if(body?.action==="apply_precision_revision"){
+    const {projectId,filmId,version,rev,edits,sourceHash,candidateHash}=body;
+    if(![projectId,filmId].every(x=>typeof x==="string"&&UUID.test(x))||
+      !Number.isSafeInteger(version)||!Number.isSafeInteger(rev)||
+      ![sourceHash,candidateHash].every(x=>typeof x==="string"&&/^[0-9a-f]{64}$/.test(x)))
+      return json({error:"Révision invalide."},400);
+    const {data:owned,error:ownerError}=await admin.from("projects").select("id").eq("id",projectId).eq("user_id",userId).maybeSingle();
+    if(ownerError||!owned)return json({error:"Projet introuvable."},404);
+    const {data:mission,error:missionError}=await admin.from("production_missions").select("id")
+      .eq("project_id",projectId).eq("user_id",userId).not("status","in","(done,failed,canceled,needs_review)").limit(1).maybeSingle();
+    if(missionError||mission)return json({error:"Révision indisponible pendant une production active."},409);
+    const {data:row,error:loadError}=await admin.from("films").select("id,data,version,rev")
+      .eq("project_id",projectId).eq("user_id",userId).order("version",{ascending:false}).limit(1).maybeSingle();
+    if(loadError||!row||row.id!==filmId||row.version!==version||row.rev!==rev)
+      return json({error:"Version de travail modifiée. Recrée la prévisualisation."},409);
+    try{
+      const p=await verifyPrecisionRevision(row.data,edits,sourceHash,candidateHash);
+      const {data:saved,error:saveError}=await admin.rpc("save_film_operation",{
+        p_user_id:userId,p_film_id:row.id,p_rev:row.rev,p_data:p.candidate,
+        p_op:{name:"precision_revision",args:{edits:p.receipt.edits,sourceHash,candidateHash}}
+      });
+      if(saveError||!saved)return json({error:"Révision non enregistrée; recharge le film."},409);
+      return json({ok:true,applied:true,filmId,version,changes:p.receipt.changes,renderRequested:false});
+    }catch{return json({error:"Révision refusée ou prévisualisation obsolète."},409);}
+  }
   if(body?.action==="approve_production"||body?.action==="control_production"){
     const missionId=body.mission_id;
     if(typeof missionId!=="string"||!UUID.test(missionId))return json({error:"Mission invalide"},400);
@@ -301,7 +349,7 @@ async function handle(req: Request): Promise<Response> {
   const draftContext=pendingDraft
     ? `\nPROPOSITION CRÉATIVE EN ATTENTE (NON APPROUVÉE). Objectif original : ${pendingDraft.goal}. Durée cible actuelle : ${pendingDraft.target_seconds} secondes. Proposition actuelle :\n${pendingDraft.plan}\nL'utilisateur peut donner des modifications libres dans le chat. S'il demande un ajustement, appelle UNIQUEMENT propose_production en conservant l'objectif original et les autres éléments non concernés. Ne touche PAS au Film JSON ou aux médias avant validation. Si l'utilisateur pose une question, réponds normalement sans modifier le plan. La réponse courte OK est traitée séparément et n'arrive pas au modèle.`
     : "";
-  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une simple modification locale sans demande de nouvelle production, conserve le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
+  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une modification locale d’un schéma animé existant, propose preview_precision_revision. Cette prévisualisation n’enregistre rien : ne prétends jamais que la révision a été appliquée. Les autres modifications locales conservent le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
   const availableTools=pendingDraft?[PROPOSAL_TOOL]:[...TOOLS,PROPOSAL_TOOL];
 
   const ctx: Ctx = { admin, userId, authToken: token, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };

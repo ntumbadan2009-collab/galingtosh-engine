@@ -1,0 +1,31 @@
+name: 150-second audiovisual validation
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  long-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - run: python scripts/validate_long_render.py long-validation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: galingtosh-150-second-fixture
+          path: |
+            long-validation/final.mp4
+            long-validation/report.json
+            long-validation/visual_evidence/
+          retention-days: 7

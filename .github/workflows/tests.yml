@@ -2,9 +2,9 @@ name: Engine tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/level-7-global-director, feature/level-8-precision-revision, feature/levels-9-12-consolidation]
   pull_request:
-    branches: [main]
+    branches: [main, feature/level-6-adaptive-director, feature/level-7-global-director, feature/level-8-precision-revision]
 
 permissions:
   contents: read
@@ -45,6 +45,6 @@ jobs:
         with:
           deno-version: v2.x
       - name: Test film operations
-        run: deno test supabase/functions/chat-agent/film_test.ts supabase/functions/chat-agent/narrative.test.ts supabase/functions/chat-agent/motion.test.ts
+        run: deno test supabase/functions/chat-agent/film_test.ts supabase/functions/chat-agent/narrative.test.ts supabase/functions/chat-agent/motion.test.ts supabase/functions/chat-agent/editorial_test.ts supabase/functions/chat-agent/production_test.ts supabase/functions/chat-agent/cinematic_test.ts supabase/functions/chat-agent/creative_test.ts supabase/functions/chat-agent/cinematic_repair_test.ts supabase/functions/chat-agent/sound_test.ts supabase/functions/chat-agent/research_test.ts supabase/functions/chat-agent/adaptive_test.ts supabase/functions/chat-agent/variant_review_test.ts supabase/functions/chat-agent/global_director_test.ts supabase/functions/chat-agent/precision_revision_test.ts supabase/functions/chat-agent/consolidation_test.ts
       - name: Check Edge functions
         run: deno check supabase/functions/chat-agent/index.ts supabase/functions/request-render/index.ts supabase/functions/search-media/index.ts

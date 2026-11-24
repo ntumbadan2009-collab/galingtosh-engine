@@ -62,3 +62,12 @@ Deno.test("Switching back to a real media asset discards stale code diagram",()=
   assert(x.scenes[0].shots[0].visualSpec===undefined,"Stale programmatic spec leaked");
   assert(narrativePreflight(x).length>0,"Real media must be reviewed");
 });
+
+Deno.test("3D geometry requires explicitly narrated shape and rotation",()=>{
+ const quote="Le cube tourne autour de son axe.";
+ const scene={narration:{text:quote}};
+ const shot={visualText:quote,visualSpec:{type:"cube_rotation",items:[{text:quote}]}};
+ if(motionSpecIssues(scene,shot).length)throw Error("valid cube refused");
+ shot.visualSpec.type="sphere_rotation";
+ if(!motionSpecIssues(scene,shot).length)throw Error("unsupported inference allowed");
+});

@@ -9,6 +9,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import os
+import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -48,41 +52,49 @@ class SceneCheckpoints:
 
     async def restore(self, index: int, signature: str, work: Path) -> list[dict] | None:
         prefix = self.prefix(index, signature)
-        downloaded: list[Path] = []
+        committed: list[Path] = []
+        success = False
         try:
             manifest_bytes = await self.db.download_storage_bytes(self.bucket, prefix + "/manifest.json", max_bytes=64 * 1024)
             manifest = json.loads(manifest_bytes)
-            if (manifest.get("version") != CHECKPOINT_FORMAT or
-                    manifest.get("signature") != signature or
-                    not isinstance(manifest.get("segments"), list) or
-                    not 1 <= len(manifest["segments"]) <= 150):
+            if (manifest.get("version") != CHECKPOINT_FORMAT or manifest.get("signature") != signature or
+                    not isinstance(manifest.get("segments"), list) or not 1 <= len(manifest["segments"]) <= 150):
                 return None
             entries: list[dict] = []
+            seen = set()
+            # Validate every entry before downloading anything. Never replace an
+            # existing segment from an earlier scene, even on corrupt manifests.
             for item in manifest["segments"]:
-                name = item.get("name")
-                checksum = item.get("sha256")
-                size = item.get("size")
-                duration = item.get("duration")
-                if (not isinstance(name, str) or not name.startswith("segment_") or
-                        not name.endswith(".mp4") or "/" in name or "\\" in name or
-                        not isinstance(size, int) or size <= 0 or size > MAX_SEGMENT_BYTES or
-                        not isinstance(duration, (int, float)) or duration <= 0 or
-                        not isinstance(checksum, str) or len(checksum) != 64):
+                name, checksum, size, duration = (item.get(k) for k in ("name","sha256","size","duration"))
+                if (not isinstance(name,str) or not re.fullmatch(r"segment_[A-Za-z0-9_]+\.mp4",name) or
+                    name in seen or (work/name).exists() or type(size) is not int or not 0<size<=MAX_SEGMENT_BYTES or
+                    type(duration) not in (int,float) or not math.isfinite(duration) or duration<=0 or
+                    not isinstance(checksum,str) or not re.fullmatch(r"[0-9a-f]{64}",checksum)):
                     return None
-                target = work / name
-                downloaded.append(target)
-                await self.db.download_storage_file(self.bucket, prefix + "/" + name, target, max_bytes=size)
-                if target.stat().st_size != size or sha256_file(target) != checksum:
-                    raise ValueError("Checkpoint integrity mismatch")
-                entries.append({"name": name, "shot_id": item.get("shot_id"), "duration": float(duration)})
-            logger.info("restored scene=%s segments=%s", index + 1, len(entries))
+                seen.add(name)
+                entries.append({"name":name,"shot_id":item.get("shot_id"),"duration":float(duration)})
+            with tempfile.TemporaryDirectory(prefix="restore-",dir=work) as tmp:
+                staging=Path(tmp)
+                for item in manifest["segments"]:
+                    name=item["name"]
+                    target=staging/name
+                    await self.db.download_storage_file(self.bucket,prefix+"/"+name,target,max_bytes=item["size"])
+                    if target.stat().st_size!=item["size"] or sha256_file(target)!=item["sha256"]:
+                        raise ValueError("Checkpoint integrity mismatch")
+                for entry in entries:
+                    target=work/entry["name"]
+                    # Exclusive link on the same filesystem, never overwrite.
+                    os.link(staging/entry["name"],target)
+                    committed.append(target)
+            success=True
+            logger.info("restored scene=%s segments=%s",index+1,len(entries))
             return entries
         except Exception as exc:
-            logger.warning("scene checkpoint unavailable index=%s: %s", index, type(exc).__name__)
-            # A partial restore must not leave corrupt scene files behind.
-            for file in downloaded:
-                file.unlink(missing_ok=True)
+            logger.warning("scene checkpoint unavailable index=%s: %s",index,type(exc).__name__)
             return None
+        finally:
+            if not success:
+                for file in committed: file.unlink(missing_ok=True)
 
     async def save(self, index: int, signature: str, entries: list[dict], work: Path) -> bool:
         prefix = self.prefix(index, signature)

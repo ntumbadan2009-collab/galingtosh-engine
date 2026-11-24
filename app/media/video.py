@@ -1,6 +1,7 @@
 from pathlib import Path
 from app.media.ffmpeg import run_ffmpeg, probe_media, FFmpegError
 import math
+from app.media.editorial_motion import zoom_filter
 
 CAMERA_TYPES = {"none", "ken_burns", "dolly", "pan", "tilt", "zoom_in", "zoom_out"}
 
@@ -50,7 +51,9 @@ async def normalize_video(source: Path, destination: Path, width: int, height: i
                 "lecture répétée ; rechercher une séquence complémentaire pour améliorer le montage."
             )
     camera = camera if camera in CAMERA_TYPES else "none"
-    if camera == "none":
+    if camera in {"zoom_in","zoom_out"}:
+        vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1,fps={fps}," + zoom_filter(camera,width,height,fps,duration)
+    elif camera == "none":
         vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1,fps={fps}"
     else:
         scale = 1.12 if camera in {"ken_burns", "dolly", "pan", "tilt", "zoom_in", "zoom_out"} else 1.0

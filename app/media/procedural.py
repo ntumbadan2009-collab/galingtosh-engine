@@ -5,6 +5,8 @@ import math
 import struct
 import wave
 import random
+import unicodedata
+import re
 from pathlib import Path
 
 RATE = 16000
@@ -59,15 +61,25 @@ def compose_bed(scenes: list[dict], cues: list[dict], output: Path) -> bool:
     return True
 
 
+# Intentionally accept only explicit, unambiguous effect labels. A compound
+# sentence or negation must not silently produce a misleading sound.
+EFFECT_ALIASES = {
+    "steps": {"pas", "pas de marche", "bruit de pas", "footstep", "footsteps", "steps"},
+    "impact": {"impact", "coup", "claquement", "clap", "bruit d impact"},
+    "rain": {"pluie", "bruit de pluie", "rain"},
+    "wind": {"vent", "bruit de vent", "wind"},
+    "whoosh": {"whoosh", "balayage", "transition", "transition sonore"},
+}
+
+def classify_effect(requested: str) -> str | None:
+    text = unicodedata.normalize("NFKC", requested).casefold()
+    text = " ".join(re.sub(r"[^\w ]", " ", text).split())
+    return next((kind for kind,aliases in EFFECT_ALIASES.items() if text in aliases), None)
+
 def synthesize_effect(requested: str, output: Path, duration: float = 2.0) -> bool:
     """Synthesize a small deterministic effect only for supported, explicit categories."""
-    text = requested.casefold()
-    if any(word in text for word in ("pas", "footstep", "marche")): kind = "steps"
-    elif any(word in text for word in ("impact", "coup", "claquement", "clap")): kind = "impact"
-    elif any(word in text for word in ("pluie", "rain")): kind = "rain"
-    elif any(word in text for word in ("vent", "wind")): kind = "wind"
-    elif any(word in text for word in ("whoosh", "balayage", "transition")): kind = "whoosh"
-    else: return False
+    kind = classify_effect(requested)
+    if kind is None: return False
     count = max(1, min(RATE * 12, round(duration * RATE)))
     rng = random.Random(f"galingtosh:{kind}:{requested}")
     samples = [0.0] * count

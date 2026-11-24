@@ -184,3 +184,31 @@ async def evidence_frames(request: Request, payload: EvidenceFramesRequest) -> d
         raise HTTPException(status_code=422, detail="Échantillonnage du passage impossible.") from None
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+class AudioEvidenceRequest(ProbeRequest):
+    source_in_sec: float = Field(default=0,ge=0,le=3600)
+    duration_sec: float = Field(ge=.25,le=12)
+
+@user_router.post("/audio-evidence")
+async def audio_evidence(request:Request,payload:AudioEvidenceRequest)->dict[str,Any]:
+    from app.media.audio_evidence import licensed_public_sound,extract_audio_clip,MAX_SOUND_BYTES
+    db=getattr(request.app.state,"supabase",None)
+    if not isinstance(db,SupabaseREST):raise HTTPException(status_code=503,detail="Stockage indisponible.")
+    token=request.headers.get("Authorization","").removeprefix("Bearer ").strip()
+    mission_id=request.headers.get("X-Production-Mission","")
+    authenticated=(await db.production_user_id(token,mission_id) if mission_id else await db.authenticated_user_id(token))
+    if not authenticated or authenticated!=payload.user_id:raise HTTPException(status_code=401,detail="Session invalide.")
+    rows=await db.read_media_assets(payload.project_id,[payload.media_id])
+    if not rows or str(rows[0].get("user_id"))!=authenticated:raise HTTPException(status_code=404,detail="Média introuvable.")
+    row=rows[0]
+    if not licensed_public_sound(row):raise HTTPException(status_code=422,detail="Seul un fichier audio public original CC0 ou CC BY, avec attribution, peut être contrôlé.")
+    directory=Path(tempfile.mkdtemp(prefix="gt-sound-evidence-"))
+    try:
+        target=directory/"source"
+        _,mime=await download_public_media(row["provenance"]["download_url"],target,MAX_SOUND_BYTES)
+        if not mime.startswith("audio/"):raise ValueError("Type MIME non audio.")
+        return {"mediaId":payload.media_id,**await extract_audio_clip(target,payload.source_in_sec,payload.duration_sec,directory/"clip.wav")}
+    except (OSError,ValueError,FFmpegError):
+        raise HTTPException(status_code=422,detail="Extrait audio réel non exploitable.") from None
+    finally:shutil.rmtree(directory,ignore_errors=True)

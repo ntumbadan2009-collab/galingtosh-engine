@@ -50,9 +50,15 @@ def release_piper_voice() -> None:
     gc.collect()
 
 
+def voice_direction(rate: Any = 0, pitch: Any = 0) -> tuple[int,int]:
+    if type(rate) is not int or type(pitch) is not int or not -20<=rate<=20 or not -12<=pitch<=12:
+        raise ValueError("Direction vocale : débit ±20 %, hauteur ±12 Hz.")
+    return rate,pitch
+
 async def synthesize_text_with_provider(
     text: str, language: str, voice: str | None, destination: Path,
     preferred_provider: str = "edge-tts",
+    rate_percent: int = 0, pitch_hz: int = 0,
 ) -> tuple[float, str]:
     """Synthesize speech, falling back to the bundled local French Piper voice."""
     clean = str(text or "").strip()
@@ -60,13 +66,18 @@ async def synthesize_text_with_provider(
         raise ValueError("Texte TTS invalide (1 à 4000 caractères).")
     destination.parent.mkdir(parents=True, exist_ok=True)
     lang = (language or "fr").split("-")[0].lower()
+    rate,pitch=voice_direction(rate_percent,pitch_hz)
     providers = [preferred_provider] if preferred_provider == "piper" else ["edge-tts", "piper"]
+    if rate or pitch:
+        # Local fallback cannot promise the same prosody. Never silently lose it.
+        if preferred_provider=="piper": raise ValueError("Piper ne prend pas en charge cette direction vocale.")
+        providers=["edge-tts"]
     errors = []
     for provider in providers:
         try:
             if provider == "edge-tts":
                 import edge_tts
-                await asyncio.wait_for(edge_tts.Communicate(clean, _voice(language, voice)).save(str(destination)), timeout=45)
+                await asyncio.wait_for(edge_tts.Communicate(clean, _voice(language, voice), rate=f"{rate:+d}%", pitch=f"{pitch:+d}Hz").save(str(destination)), timeout=45)
             elif provider == "piper" and lang == "fr":
                 await asyncio.wait_for(asyncio.to_thread(_synthesize_piper, clean, destination), timeout=90)
             else:
@@ -109,6 +120,7 @@ async def synthesize_scene_narrations(film: dict[str, Any], workdir: Path) -> tu
                 duration, provider = await synthesize_text_with_provider(
                     str(spec["text"]), language, spec.get("voice"), destination,
                     str(spec.get("ttsProvider") or "edge-tts"),
+                    spec.get("ratePercent",0), spec.get("pitchHz",0),
                 )
                 files[media_id] = destination
                 durations[scene_id] = duration

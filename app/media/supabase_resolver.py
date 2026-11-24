@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from typing import Any
 from app.media.resolver import download_public_media
+from app.media.audio_evidence import licensed_public_sound, MAX_SOUND_BYTES
 from app.media.graphics import chart_to_png, chart_to_video, sanitize_svg_to_png
 from app.storage.supabase import SupabaseREST, SupabaseError
 
@@ -34,7 +35,9 @@ async def resolve_film_media(film:dict[str,Any],project_id:str,user_id:str,db:Su
  for index,item in enumerate(film.get("media",[])):
   if not isinstance(item,dict) or not item.get("id"): continue
   mid=str(item["id"]); row=by_id.get(mid)
-  if not row: warnings.append(f"Média {mid} absent de media_assets : ignoré."); continue
+  if not row or str(row.get("user_id"))!=user_id: warnings.append(f"Média {mid} absent ou hors périmètre : ignoré."); continue
+  checked_sound=any(t.get("soundEvidence") and t.get("mediaRef")==mid for t in (film.get("audio") or {}).get("tracks",[]) if isinstance(t,dict))
+  if checked_sound and not licensed_public_sound(row):warnings.append(f"Licence sonore de {mid} non conforme.");continue
   kind=str(row.get("kind") or "").lower(); source=str(row.get("source") or "")
   if kind=="model3d": warnings.append(f"Média 3D {mid} non pris en charge."); continue
   if kind not in ALLOWED_MIME: warnings.append(f"Type de média {mid} non pris en charge."); continue
@@ -59,7 +62,7 @@ async def resolve_film_media(film:dict[str,Any],project_id:str,user_id:str,db:Su
     provenance=row.get("provenance") or {}
     url=provenance.get("download_url") or provenance.get("preview_url")
     if not url: warnings.append(f"Média recherché {mid} sans URL."); continue
-    _,mime=await download_public_media(str(url),target,MAX_MEDIA_BYTES)
+    _,mime=await download_public_media(str(url),target,MAX_SOUND_BYTES if checked_sound else MAX_MEDIA_BYTES)
    else:
     warnings.append(f"Source « {source} » du média {mid} non prise en charge."); continue
    if mime not in ALLOWED_MIME[kind]: raise SupabaseError("Type MIME incompatible.")

@@ -16,6 +16,9 @@ from app.core.renderer import FilmRenderer, RenderError, _rss_mb
 from app.core.checkpoints import SceneCheckpoints
 from app.core.narration import align_scene_narrations
 from app.core.narrative_policy import validate_narrative_policy
+from app.core.editorial_repair import repair_unavailable_media
+from app.core.cinematic_review import collect_review_batches
+from app.media.audio_evidence import prepare_verified_sound
 from app.media.supabase_resolver import resolve_film_media, write_credits
 from app.media.subtitles import write_srt
 from app.media.tts import synthesize_scene_narrations, synthesize_tts_tracks
@@ -181,6 +184,19 @@ class TaskManager:
                         media_warnings.append("Piste musicale importée ignorée : seule la musique procédurale par scène est utilisée.")
                     continue
                 if track.get("kind") != "sfx": continue
+                if track.get("disabled"):
+                    continue
+                if track.get("soundEvidence"):
+                    original=media_files.get(track.get("mediaRef"))
+                    if not original:raise RenderError("Effet sonore vérifié devenu indisponible.")
+                    safe_target=workdir / f"checked_sound_{len(media_files):04d}.wav"
+                    try:
+                        await prepare_verified_sound(film,track,original,safe_target)
+                    except (ValueError,FFmpegError,OSError) as exc:
+                        raise RenderError("Effet sonore vérifié : "+str(exc)) from None
+                    ref=f"__checked_sound_{len(media_files)}"
+                    media_files[ref]=safe_target;track["mediaRef"]=ref
+                    continue
                 expected = str(track.get("expectedContent") or "").strip()
                 fallback = workdir / f"generated_sfx_{track.get('id','sound')}.wav"
                 duration = max((float(e.get("durationSec",2)) for e in track.get("events",[]) if isinstance(e,dict)),default=2.0)
@@ -194,6 +210,7 @@ class TaskManager:
                     track["disabled"] = True
                     track.pop("mediaRef", None)
                     media_warnings.append(f"Effet « {expected or 'non décrit'} » omis : ce type de son n’est pas encore pris en charge par la synthèse procédurale.")
+            media_warnings.extend(await repair_unavailable_media(film, media_files))
             referenced = {shot.get("mediaRef") for scene in film.get("scenes", []) for shot in scene.get("shots", []) if shot.get("mediaRef")}
             referenced.update(track.get("mediaRef") for track in audio_tracks if track.get("mediaRef") and not track.get("disabled"))
             if referenced - media_files.keys():
@@ -225,9 +242,20 @@ class TaskManager:
                 write_credits(credits_path, credits)
             srt_path = workdir / f"{job_id}.srt"
             has_srt = write_srt(film.get("subtitles", []) or [], srt_path,
-                                (film.get("info") or {}).get("language"))
+                                (film.get("info") or {}).get("language"),width=result["width"],height=result["height"])
 
             project_id = str(job["project_id"])
+            if (film.get("info") or {}).get("editorialLevel") in {4, 5}:
+                self.current["step"] = "préparation des preuves cinématographiques"
+                batches = await collect_review_batches(output,film,workdir/"cinematic-review")
+                manifest = []
+                for batch in batches:
+                    if await self._is_canceled(job_id):
+                        return
+                    object_path = f"{project_id}/{job_id}.review.{batch['index']:03d}.json"
+                    await self.db.upload_file("renders",object_path,batch["path"],"application/json")
+                    manifest.append({"index":batch["index"],"count":batch["count"]})
+                result["cinematic_review"] = {"version":1,"batches":manifest,"sampling":"two_final_frames_per_shot","semantic_review":"pending"}
             output_object = f"{project_id}/{job_id}.mp4"
             self.current["step"] = "envoi du rendu"
             if await self._is_canceled(job_id):

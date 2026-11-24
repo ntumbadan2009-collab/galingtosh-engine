@@ -4,11 +4,15 @@ import shutil
 import tempfile
 import logging
 import gc
-from app.core.checkpoints import SceneCheckpoints, fingerprint
+import asyncio
+from app.media.editorial_motion import accent_events, render_accents
+from app.core.checkpoints import SceneCheckpoints, fingerprint, sha256_file
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from app.core.validator import validate_film
+from app.core.editorial import level3, timeline_issues, inspect_render
+from app.core.editorial_repair import replace_with_grounded_card
 from app.core.narrative_policy import narrative_issues
 from app.media.narrative_cards import render_code_card
 from app.media.motion_graphics import render_motion_graphic
@@ -17,8 +21,10 @@ from app.media.images import normalize_image
 from app.media.video import normalize_video
 from app.media.transitions import assemble_segments
 from app.media.audio import mix_audio
+from app.media.final_audio_review import inspect_final_audio
 from app.media.compression import fit_mp4_to_limit
 from app.media.procedural import compose_bed
+from app.media.creative_music import compose_score
 from app.media.subtitles import write_srt
 from app.media.effects import build_video_filters, finish_video
 
@@ -97,6 +103,11 @@ class FilmRenderer:
                 raise RenderError("Montage non conforme aux preuves visuelles : " + " ".join(issues[:5]))
         if not report["valid"]:
             raise RenderError("Film JSON invalide : " + " ".join(report["errors"][:4]))
+        editorial = level3(film)
+        if editorial:
+            problems = timeline_issues(film)
+            if problems:
+                raise RenderError("Contrôle éditorial : " + " ".join(problems[:5]))
         scenes = sorted(film.get("scenes", []), key=lambda x: x.get("order", 0))
         total_duration = sum(float(s.get("durationSec", 0)) for s in scenes)
         if total_duration <= 0: raise RenderError("La durée totale du film doit être positive.")
@@ -114,9 +125,17 @@ class FilmRenderer:
         segment_durations: list[float] = []
         # Includes final narration alignment and all render settings. Altered
         # scenes, durations or film versions cannot reuse stale segment files.
-        render_signature = fingerprint({"format": 1, "film": film, "resolution": [width, height], "fps": fps})
+        # Bind cache reuse to actual source bytes, not just an unchanged URL.
+        asset_hashes = {}
+        if checkpoints is not None:
+            for ref, path in sorted(media_files.items()):
+                if path.is_file():
+                    asset_hashes[ref] = await asyncio.to_thread(sha256_file, path)
+        render_signature = fingerprint({"format": 3, "film": film, "resolution": [width, height], "fps": fps, "asset_hashes": asset_hashes})
         try:
             _memory("render_start")
+            subtitle_path = work / "captions.srt"
+            has_subtitles = write_srt(film.get("subtitles", []) or [], subtitle_path, (film.get("info") or {}).get("language"),width=width,height=height)
             total_shots = max(1, sum(len(s.get("shots", [])) for s in scenes))
             completed_shots = 0
             for scene_index, scene in enumerate(scenes):
@@ -148,6 +167,7 @@ class FilmRenderer:
                                                     f"scène {scene_index + 1} restaurée")
                         continue
                 cursor = 0.0
+                scene_repaired = False
                 scene_segment_start = len(segments)
                 for shot_index, shot in enumerate(shots):
                     start = max(0.0, float(shot.get("inSec", 0)))
@@ -190,7 +210,7 @@ class FilmRenderer:
                                 scene_title=str(scene.get("title") or ""),
                                 scene_number=scene_index + 1,
                                 width=width, height=height, fps=fps,
-                                duration=duration, workdir=work,
+                                duration=duration, workdir=work, caption_safe=has_subtitles,
                             )
                         else:
                             # V1 legacy remains stable for existing projects.
@@ -200,11 +220,11 @@ class FilmRenderer:
                                 scene_title=str(scene.get("title") or ""),
                                 scene_number=scene_index + 1,
                                 width=width, height=height,
-                                style=str(shot.get("cardStyle") or "focus"),
+                                style=str(shot.get("cardStyle") or "focus"),caption_safe=has_subtitles,
                             )
                             camera = ((shot.get("camera") or {}).get("type") or "ken_burns")
                             await normalize_image(card, segment, width, height, fps, duration,
-                                                  "ken_burns" if camera == "none" else camera)
+                                                  "none" if has_subtitles else ("ken_burns" if camera == "none" else camera))
                     elif not source or not source.is_file():
                         if (film.get("info") or {}).get("visualPolicy") == "strict":
                             raise RenderError(
@@ -227,6 +247,20 @@ class FilmRenderer:
                         else:
                             warnings.append(f"Type de média non visuel pour le plan {shot_index+1}.")
                             await self._black(segment, width, height, fps, duration)
+                    # Inspect the actual normalized external shot, not search tags.
+                    if editorial and shot.get("visualMode") != "programmatic":
+                        shot_probe = await probe_media(str(segment))
+                        checked = await inspect_render(segment, shot_probe, duration, False, [], fps)
+                        if not checked["passed"]:
+                            if not replace_with_grounded_card(scene, shot):
+                                raise RenderError("Plan défectueux sans remplacement narratif sûr : " + " ".join(checked["issues"]))
+                            card = work / f"repair_{scene_index:03d}_{shot_index:03d}.png"
+                            render_code_card(card,narration_quote=shot["visualText"],
+                                scene_title=str(scene.get("title") or ""),scene_number=scene_index+1,
+                                width=width,height=height,style=shot["cardStyle"],caption_safe=has_subtitles)
+                            await normalize_image(card,segment,width,height,fps,duration,"none")
+                            scene_repaired = True
+                            warnings.append(f"Plan {shot.get('id')} réparé par citation fidèle : " + " ".join(checked["issues"]))
                     segments.append(segment)
                     segment_shot_ids.append(str(shot.get("id")) if shot.get("id") is not None else None)
                     segment_durations.append(duration); cursor = end
@@ -251,7 +285,7 @@ class FilmRenderer:
                         black = work / f"segment_{len(segments):04d}.mp4"
                         await self._black(black, width, height, fps, scene_duration-cursor)
                         segments.append(black); segment_shot_ids.append(None); segment_durations.append(scene_duration-cursor)
-                if checkpoints is not None and len(segments) > scene_segment_start:
+                if checkpoints is not None and not scene_repaired and len(segments) > scene_segment_start:
                     completed_scene = [
                         {"name": path.name, "shot_id": shot_id, "duration": duration}
                         for path, shot_id, duration in zip(
@@ -281,26 +315,31 @@ class FilmRenderer:
             filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height, targets, text_directory=work)
             warnings.extend(effect_warnings)
             applied_effect_count = len(filters)
-            subtitle_path = work / "captions.srt"
-            has_subtitles = write_srt(film.get("subtitles", []) or [], subtitle_path, (film.get("info") or {}).get("language"))
             styled = work / "styled.mp4"
             _memory("before_effects_subtitles")
-            await finish_video(assembled, styled, filters, subtitle_path if has_subtitles else None)
+            await finish_video(assembled, styled, filters, subtitle_path if has_subtitles else None,width=width,height=height)
             _memory("after_effects_subtitles")
             if progress_callback: await progress_callback(86, "effets et sous-titres terminés")
             audio = film.get("audio") or {}
             tracks = list(audio.get("tracks") or [])
             music = audio.get("proceduralMusic") or {}
-            if music.get("enabled") and compose_bed(scenes, music.get("cues") or [], work / "procedural.wav"):
+            score = compose_score if (film.get("info") or {}).get("editorialLevel")==5 else compose_bed
+            if music.get("enabled") and await asyncio.to_thread(score, scenes, music.get("cues") or [], work / "procedural.wav"):
                 media_files = {**media_files, "__procedural_music": work / "procedural.wav"}
                 tracks.append({"id":"__procedural_music", "kind":"music", "mediaRef":"__procedural_music",
                                # Earlier plans stored -15 dB, which made this
                                # small procedural pad effectively inaudible on
                                # phone speakers. Keep it below narration but
                                # enforce a modest audible floor.
-                               "volumeDb":max(-8.0, min(0.0, float(music.get("volumeDb", -8))))})
+                               "volumeDb":max(-60.0, min(0.0, float(music.get("volumeDb", -8)))) if (film.get("info") or {}).get("editorialLevel")==5 else max(-8.0, min(0.0, float(music.get("volumeDb", -8))))})
+            accents = accent_events(film) if editorial else []
+            if accents:
+                accent_path = work / "editorial_accents.wav"
+                await asyncio.to_thread(render_accents, accents, total_duration, accent_path)
+                media_files = {**media_files, "__editorial_accents": accent_path}
+                tracks.append({"id":"__editorial_accents","kind":"sfx","mediaRef":"__editorial_accents","volumeDb":-10})
             has_audio, audio_warnings = await mix_audio(styled, tracks, media_files, output,
-                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128))
+                total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128), editorial=editorial, adaptive=(film.get("info") or {}).get("editorialLevel") in {4,5})
             warnings.extend(audio_warnings)
             _memory("after_audio_mix")
             if progress_callback: await progress_callback(89, "mixage audio terminé")
@@ -317,6 +356,27 @@ class FilmRenderer:
             size_mb = output.stat().st_size / (1024 * 1024)
             _memory("before_final_probe")
             probe = await probe_media(str(output))
+            qa = None
+            if editorial:
+                if progress_callback: await progress_callback(94, "contrôle audiovisuel du fichier final")
+                expected = [s for s in scenes if (s.get("narration") or {}).get("text")]
+                voices = []
+                for scene in expected:
+                    ref = "__scene_narration_" + str(scene.get("id", ""))
+                    voice = media_files.get(ref)
+                    if not voice or not voice.is_file():
+                        raise RenderError("Contrôle qualité : voix de scène manquante.")
+                    voices.append(voice)
+                qa = await inspect_render(output, probe, total_duration, bool(expected), voices, fps)
+                if not qa["passed"]:
+                    raise RenderError("Contrôle qualité : " + " ".join(qa["issues"]))
+            audio_review = {"version":1,"status":"no_audio","semantic_audio_review":"not_performed"}
+            if editorial and has_audio:
+                try:
+                    audio_review = await inspect_final_audio(output, total_duration)
+                except (FFmpegError, ValueError, asyncio.TimeoutError):
+                    audio_review = {"version":1,"status":"unavailable","semantic_audio_review":"not_performed"}
+                    warnings.append("Mesure sonore finale indisponible; écoute humaine recommandée.")
             _memory("render_complete")
             streams = probe.get("streams", [])
             video = next((s for s in streams if s.get("codec_type") == "video"), {})
@@ -324,7 +384,7 @@ class FilmRenderer:
                 "width": video.get("width"), "height": video.get("height"), "fps": fps,
                 "size_mb": round(size_mb, 3), "compression": compression, "warnings": list(dict.fromkeys(warnings)),
                 "audio": any(s.get("codec_type") == "audio" for s in streams),
-                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count}
+                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa, "final_audio_review": audio_review, "editorial_accents": accents, "editorial_level": (film.get("info") or {}).get("editorialLevel")}
         except (OSError, FFmpegError) as exc:
             raise RenderError(str(exc)) from None
         finally:

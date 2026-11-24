@@ -16,15 +16,19 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from app.media.ffmpeg import run_ffmpeg
+from app.media.geometry3d import draw_geometry
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-VISUAL_TYPES = {"focus", "steps", "timeline", "comparison"}
+VISUAL_TYPES = {"focus", "steps", "timeline", "comparison", "cause_effect", "cube_rotation", "sphere_rotation"}
 PALETTE = {
     "focus": ((10, 23, 42), (108, 229, 201)),
     "steps": ((12, 29, 44), (104, 205, 250)),
     "timeline": ((23, 23, 47), (192, 153, 255)),
     "comparison": ((33, 23, 40), (251, 170, 123)),
+    "cause_effect": ((13, 35, 38), (95, 231, 195)),
+    "cube_rotation": ((14, 24, 43), (122, 219, 249)),
+    "sphere_rotation": ((14, 24, 43), (122, 219, 249)),
 }
 FRAME_RATE = 8
 
@@ -74,7 +78,7 @@ def _fitted(draw: ImageDraw.ImageDraw, text: str, box, *, strong: bool, tint):
     for px in range(max_size,minimum-1,-2):
         f=_font(px,strong);lines=_wrap(draw,text,f,w)
         line_h=max(px+6,int(px*1.28))
-        if len(lines)*line_h <= h:
+        if len(lines)*line_h <= h and all(draw.textbbox((0,0),line,font=f)[2]<=w for line in lines):
             break
     else:
         raise ValueError("Texte de schéma trop long pour rester lisible.")
@@ -126,6 +130,13 @@ def _draw_frame(*, width:int,height:int,kind:str,items:list[dict],scene_title:st
     title=(scene_title or "Récit visuel").strip()[:64]
     _fitted(d,title,(margin+mark+round(18*unit),round(title_h*.48),width-margin,round(title_h*.87)),
             strong=False,tint=(214,222,237))
+    if kind in {"cube_rotation","sphere_rotation"}:
+        top=title_h+round(height*.025)
+        bottom=round(height*.70)
+        draw_geometry(d,kind,(margin,top,width-margin,bottom),time_sec,duration,accent)
+        _fitted(d,str(items[0]["text"]),(margin,round(height*.72),width-margin,round(height*.89)),strong=True,tint=(250,251,253))
+        label("SCHÉMA GÉOMÉTRIQUE — NON À L'ÉCHELLE",margin,round(height*.93),max(12,round(15*unit)),accent,False)
+        return im
     boxes=_layout_boxes(width,height,kind,len(items))
     count=len(items)
     for i,(item,box) in enumerate(zip(items,boxes)):
@@ -142,11 +153,11 @@ def _draw_frame(*, width:int,height:int,kind:str,items:list[dict],scene_title:st
         stripe=max(4,round(5*unit))
         _rounded(d,(x0+14,y0+14,x0+14+stripe,y1-14),stripe,fill=_mix(bg,accent,fade))
         tag_col=_mix(bg,accent,fade)
-        number=chr(65+i) if kind=="comparison" else f"{i+1:02d}"
+        number=("CAUSE" if i==0 else "EFFET") if kind=="cause_effect" else chr(65+i) if kind=="comparison" else f"{i+1:02d}"
         label(number,x0+round(34*unit),y0+round(21*unit),max(16,round(29*unit)),tag_col,True)
         mid=(x0+round(30*unit),y0+round(64*unit),x1-round(24*unit),y1-round(18*unit))
         _fitted(d,str(item["text"]),mid,strong=True,tint=_mix(bg,(250,251,253),fade))
-        if kind=="steps" and i<count-1 and fade>.4:
+        if kind in {"steps","cause_effect"} and i<count-1 and fade>.4:
             # Subtle directional relationship, without invented numeric metrics.
             if height>width:
                 px=(x0+x1)//2
@@ -167,7 +178,7 @@ def _draw_frame(*, width:int,height:int,kind:str,items:list[dict],scene_title:st
 
 
 def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
-                         scene_number:int,width:int,height:int,duration:float) -> int:
+                         scene_number:int,width:int,height:int,duration:float,caption_safe:bool=False) -> int:
     if not (320<=width<=1920 and 320<=height<=1920 and width*height<=2073600):
         raise ValueError("Dimensions du graphique animé non prises en charge.")
     if not math.isfinite(duration) or not .25<=duration<=12:
@@ -176,7 +187,7 @@ def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
     items=spec.get("items")
     if kind not in VISUAL_TYPES or not isinstance(items,list) or len(items) not in (1,2,3,4):
         raise ValueError("Spécification de graphique narratif invalide.")
-    if (kind=="focus" and len(items)!=1 or kind=="comparison" and len(items)!=2
+    if (kind in {"focus","cube_rotation","sphere_rotation"} and len(items)!=1 or kind in {"comparison","cause_effect"} and len(items)!=2
         or kind in {"steps","timeline"} and len(items)<2):
         raise ValueError("Nombre d'étapes incorrect pour ce type de schéma.")
     if any(not isinstance(item,dict) or not isinstance(item.get("text"),str)
@@ -186,8 +197,11 @@ def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
     count=max(2,math.ceil(duration*FRAME_RATE))
     for i in range(count):
         t=(i/FRAME_RATE)
-        picture=_draw_frame(width=width,height=height,kind=kind,items=items,
+        active_height=round(height*.74) if caption_safe else height
+        picture=_draw_frame(width=width,height=active_height,kind=kind,items=items,
             scene_title=scene_title,scene_number=scene_number,time_sec=t,duration=duration)
+        if caption_safe:
+            full=Image.new("RGB",(width,height),PALETTE[kind][0]);full.paste(picture,(0,0));picture.close();picture=full
         picture.save(folder/f"frame_{i:04d}.png",format="PNG",compress_level=1)
         picture.close()
     return count
@@ -195,14 +209,14 @@ def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
 
 async def render_motion_graphic(destination:Path,*,spec:dict[str,Any],
     scene_title:str,scene_number:int,width:int,height:int,fps:int,duration:float,
-    workdir:Path)->None:
+    workdir:Path,caption_safe:bool=False)->None:
     """FFmpeg encodes low-rate procedural frames to constant film FPS."""
     if not 1<=fps<=30:raise ValueError("Cadence hors limites.")
     frames_dir=Path(tempfile.mkdtemp(prefix="gt-motion-",dir=workdir))
     try:
         await asyncio.to_thread(render_motion_frames,frames_dir,spec=spec,
             scene_title=scene_title,scene_number=scene_number,
-            width=width,height=height,duration=duration)
+            width=width,height=height,duration=duration,caption_safe=caption_safe)
         await run_ffmpeg([
             "-framerate",str(FRAME_RATE),"-i",str(frames_dir/"frame_%04d.png"),
             "-t",f"{duration:.4f}","-vf",f"fps={fps},format=yuv420p",

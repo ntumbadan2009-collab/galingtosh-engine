@@ -1,0 +1,47 @@
+name: Hybrid audiovisual A-B demonstration
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hybrid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - run: python scripts/validate_hybrid_trial.py hybrid-validation
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Verify selection and refusal on private fixture
+        run: deno test --allow-read --allow-write scripts/trial_selection_test.ts
+      - name: Independent real-provider review (public NASA test only)
+        if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feature/level-6-adaptive-director' || github.event.pull_request.head.ref == 'feature/levels-9-12-consolidation'))
+        env:
+          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+        run: |
+          if [ -z "$LLM_PROVIDER" ] || [ -z "$LLM_MODEL" ] || [ -z "$LLM_API_KEY" ]; then
+            echo "::error::Real-provider review unavailable: repository LLM configuration missing. No selection or release authorized."
+            exit 1
+          fi
+          deno run --allow-env=LLM_PROVIDER,LLM_MODEL,LLM_API_KEY,LLM_BASE_URL,LLM_FALLBACK_MODELS --allow-net --allow-read=hybrid-validation/trial --allow-write=hybrid-validation/trial scripts/review_trial.ts hybrid-validation/trial "Illustrer fidèlement chaque extrait de narration."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hybrid-ab-demo
+          path: hybrid-validation/trial/
+          retention-days: 7
