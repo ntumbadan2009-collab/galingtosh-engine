@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, feature/level-7-global-director]
   pull_request:
-    branches: [main]
+    branches: [main, feature/level-6-adaptive-director]
 
 permissions:
   contents: read
