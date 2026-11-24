@@ -242,7 +242,7 @@ class TaskManager:
                 write_credits(credits_path, credits)
             srt_path = workdir / f"{job_id}.srt"
             has_srt = write_srt(film.get("subtitles", []) or [], srt_path,
-                                (film.get("info") or {}).get("language"))
+                                (film.get("info") or {}).get("language"),width=result["width"],height=result["height"])
 
             project_id = str(job["project_id"])
             if (film.get("info") or {}).get("editorialLevel") in {4, 5}:

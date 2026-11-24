@@ -52,6 +52,7 @@ def render_code_card(
     width: int,
     height: int,
     style: str = "focus",
+    caption_safe: bool = False,
 ) -> None:
     """Draw a coherent text/diagram visual, never an invented factual chart."""
     if not isinstance(narration_quote, str) or not 5 <= len(narration_quote.strip()) <= 280:
@@ -62,7 +63,8 @@ def render_code_card(
     img = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(img)
     sx = width / 1280
-    sy = height / 720
+    active_height = round(height*.74) if caption_safe else height
+    sy = active_height / 720
     unit = min(sx, sy)
     def p(x: float, y: float) -> tuple[int, int]:
         return round(x*sx), round(y*sy)
@@ -72,9 +74,10 @@ def render_code_card(
     # Bounded, subtle grid and a visual hierarchy inspired by documentary explainers.
     for i in range(18):
         x = int((80 + i*70) * sx)
-        draw.line((x, 0, x, height), fill=tuple(min(255, c+6) for c in background), width=1)
+        draw.line((x, 0, x, active_height), fill=tuple(min(255, c+6) for c in background), width=1)
     for i in range(11):
         y = int((30 + i*70)*sy)
+        if y>=active_height: continue
         draw.line((0, y, width, y), fill=tuple(min(255, c+6) for c in background), width=1)
     rect(70, 56, 1210, 664, fill=background, radius=32, outline=tuple(min(255,c+28) for c in background), line=2)
     rect(96, 90, 106, 160, fill=accent, radius=5)
@@ -97,7 +100,7 @@ def render_code_card(
     else:
         img.close()
         raise ValueError("Citation trop longue pour rester lisible : scinder le plan.")
-    y = int(252*sy) - min(0, (len(lines)-3)*int(line_h*0.13))
+    y = max(int(215*sy),int(400*sy)-len(lines)*line_h//2)
     for line in lines:
         draw.text((round(126*sx), y), line, font=font, fill=(245, 247, 252))
         y += line_h
@@ -111,3 +114,4 @@ def render_code_card(
                      fill=accent if idx==0 else (92,106,126))
     destination.parent.mkdir(parents=True, exist_ok=True)
     img.save(destination, format="PNG", optimize=True)
+    img.close()

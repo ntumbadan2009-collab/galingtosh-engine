@@ -9,11 +9,11 @@ from app.core.cinematic_review import collect_review_batches
 from app.media.ffmpeg import run_ffmpeg,probe_media
 
 SCENES=[
-    ("Observer",["Une observation commence par une question.","On regarde les détails qui peuvent changer notre compréhension.","Puis on décrit ce qui est effectivement visible.","Une interprétation doit rester distincte de cette observation.","Enfin, on formule une hypothèse que l'on pourra tester."]),
-    ("Mesurer",["La mesure permet de comparer des observations.","On définit une unité avant de relever les résultats.","On répète ensuite la mesure dans les mêmes conditions.","Les écarts observés sont conservés plutôt que supprimés.","Un résultat doit rester accompagné de ses limites."]),
-    ("Comparer",["Une comparaison oppose deux situations précises.","On cherche ce qui est identique dans les deux situations.","Puis on identifie les différences qui peuvent expliquer les écarts.","Une association ne démontre pas nécessairement une cause.","La comparaison oriente les prochaines vérifications."]),
-    ("Vérifier",["Une hypothèse doit pouvoir être mise à l'épreuve.","On prépare une méthode que d'autres pourront reproduire.","On vérifie ensuite si les résultats soutiennent l'hypothèse.","Si les résultats divergent, on révise notre explication.","La vérification ne consiste pas à cacher les contradictions."]),
-    ("Conclure",["Une conclusion résume ce que l'expérience permet d'affirmer.","On distingue le résultat des questions encore ouvertes.","On décrit ensuite les limites de la méthode utilisée.","Une nouvelle observation peut conduire à une autre hypothèse.","La démarche scientifique reste un travail de vérification."]),
+    ("Observer",["Le cube tourne autour de son axe.","On regarde les détails qui peuvent changer notre compréhension.","Puis on décrit ce qui est effectivement visible.","Une interprétation doit rester distincte de cette observation.","Enfin, on formule une hypothèse que l'on pourra tester."]),
+    ("Mesurer",["La sphère tourne autour de son axe.","On définit une unité avant de relever les résultats.","On répète ensuite la mesure dans les mêmes conditions.","Les écarts observés sont conservés plutôt que supprimés.","Un résultat doit rester accompagné de ses limites."]),
+    ("Comparer",["Un résultat est stable, mais un autre résultat varie.","On cherche ce qui est identique dans les deux situations.","Puis on identifie les différences qui peuvent expliquer les écarts.","Une association ne démontre pas nécessairement une cause.","La comparaison oriente les prochaines vérifications."]),
+    ("Vérifier",["On prépare une méthode, puis on réalise la vérification.","On prépare une méthode que d'autres pourront reproduire.","On vérifie ensuite si les résultats soutiennent l'hypothèse.","Si les résultats divergent, on révise notre explication.","La vérification ne consiste pas à cacher les contradictions."]),
+    ("Conclure",["Une nouvelle observation conduit à une nouvelle hypothèse.","On distingue le résultat des questions encore ouvertes.","On décrit ensuite les limites de la méthode utilisée.","Une nouvelle observation peut conduire à une autre hypothèse.","La démarche scientifique reste un travail de vérification."]),
 ]
 
 async def main(root:Path):
@@ -32,7 +32,17 @@ async def main(root:Path):
         for j,quote in enumerate(quotes):
             shot_id=f"shot_{i}_{j}"
             sh={"id":shot_id,"order":j+1,"inSec":6*j,"outSec":6*(j+1),"visualMode":"programmatic","visualText":quote,"camera":{"type":"none"}}
-            if j==0:sh["visualSpec"]={"type":"focus","items":[{"text":quote}]}
+            if j==0:
+                templates=[
+                    ("cube_rotation",[quote]),("sphere_rotation",[quote]),
+                    ("comparison",["Un résultat est stable","un autre résultat varie"]),
+                    ("steps",["On prépare une méthode","puis on réalise la vérification"]),
+                    ("cause_effect",["Une nouvelle observation","une nouvelle hypothèse"]),
+                ]
+                kind,labels=templates[i]
+                sh["visualSpec"]={"type":kind,"items":[{"text":x} for x in labels]}
+            else:
+                sh["cardStyle"]=["focus","question","contrast","process"][j%4]
             scene["shots"].append(sh)
             film["subtitles"][0]["cues"].append({"startSec":i*30+j*6+.1,"endSec":i*30+j*6+5.8,"text":quote})
             if j==2:film["transitions"].append({"type":"zoom","atShotId":shot_id,"durationSec":.3})

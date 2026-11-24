@@ -178,7 +178,7 @@ def _draw_frame(*, width:int,height:int,kind:str,items:list[dict],scene_title:st
 
 
 def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
-                         scene_number:int,width:int,height:int,duration:float) -> int:
+                         scene_number:int,width:int,height:int,duration:float,caption_safe:bool=False) -> int:
     if not (320<=width<=1920 and 320<=height<=1920 and width*height<=2073600):
         raise ValueError("Dimensions du graphique animé non prises en charge.")
     if not math.isfinite(duration) or not .25<=duration<=12:
@@ -197,8 +197,11 @@ def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
     count=max(2,math.ceil(duration*FRAME_RATE))
     for i in range(count):
         t=(i/FRAME_RATE)
-        picture=_draw_frame(width=width,height=height,kind=kind,items=items,
+        active_height=round(height*.74) if caption_safe else height
+        picture=_draw_frame(width=width,height=active_height,kind=kind,items=items,
             scene_title=scene_title,scene_number=scene_number,time_sec=t,duration=duration)
+        if caption_safe:
+            full=Image.new("RGB",(width,height),PALETTE[kind][0]);full.paste(picture,(0,0));picture.close();picture=full
         picture.save(folder/f"frame_{i:04d}.png",format="PNG",compress_level=1)
         picture.close()
     return count
@@ -206,14 +209,14 @@ def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
 
 async def render_motion_graphic(destination:Path,*,spec:dict[str,Any],
     scene_title:str,scene_number:int,width:int,height:int,fps:int,duration:float,
-    workdir:Path)->None:
+    workdir:Path,caption_safe:bool=False)->None:
     """FFmpeg encodes low-rate procedural frames to constant film FPS."""
     if not 1<=fps<=30:raise ValueError("Cadence hors limites.")
     frames_dir=Path(tempfile.mkdtemp(prefix="gt-motion-",dir=workdir))
     try:
         await asyncio.to_thread(render_motion_frames,frames_dir,spec=spec,
             scene_title=scene_title,scene_number=scene_number,
-            width=width,height=height,duration=duration)
+            width=width,height=height,duration=duration,caption_safe=caption_safe)
         await run_ffmpeg([
             "-framerate",str(FRAME_RATE),"-i",str(frames_dir/"frame_%04d.png"),
             "-t",f"{duration:.4f}","-vf",f"fps={fps},format=yuv420p",

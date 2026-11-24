@@ -124,9 +124,11 @@ class FilmRenderer:
         segment_durations: list[float] = []
         # Includes final narration alignment and all render settings. Altered
         # scenes, durations or film versions cannot reuse stale segment files.
-        render_signature = fingerprint({"format": 1, "film": film, "resolution": [width, height], "fps": fps})
+        render_signature = fingerprint({"format": 2, "film": film, "resolution": [width, height], "fps": fps})
         try:
             _memory("render_start")
+            subtitle_path = work / "captions.srt"
+            has_subtitles = write_srt(film.get("subtitles", []) or [], subtitle_path, (film.get("info") or {}).get("language"),width=width,height=height)
             total_shots = max(1, sum(len(s.get("shots", [])) for s in scenes))
             completed_shots = 0
             for scene_index, scene in enumerate(scenes):
@@ -201,7 +203,7 @@ class FilmRenderer:
                                 scene_title=str(scene.get("title") or ""),
                                 scene_number=scene_index + 1,
                                 width=width, height=height, fps=fps,
-                                duration=duration, workdir=work,
+                                duration=duration, workdir=work, caption_safe=has_subtitles,
                             )
                         else:
                             # V1 legacy remains stable for existing projects.
@@ -211,11 +213,11 @@ class FilmRenderer:
                                 scene_title=str(scene.get("title") or ""),
                                 scene_number=scene_index + 1,
                                 width=width, height=height,
-                                style=str(shot.get("cardStyle") or "focus"),
+                                style=str(shot.get("cardStyle") or "focus"),caption_safe=has_subtitles,
                             )
                             camera = ((shot.get("camera") or {}).get("type") or "ken_burns")
                             await normalize_image(card, segment, width, height, fps, duration,
-                                                  "ken_burns" if camera == "none" else camera)
+                                                  "none" if has_subtitles else ("ken_burns" if camera == "none" else camera))
                     elif not source or not source.is_file():
                         if (film.get("info") or {}).get("visualPolicy") == "strict":
                             raise RenderError(
@@ -248,7 +250,7 @@ class FilmRenderer:
                             card = work / f"repair_{scene_index:03d}_{shot_index:03d}.png"
                             render_code_card(card,narration_quote=shot["visualText"],
                                 scene_title=str(scene.get("title") or ""),scene_number=scene_index+1,
-                                width=width,height=height,style=shot["cardStyle"])
+                                width=width,height=height,style=shot["cardStyle"],caption_safe=has_subtitles)
                             await normalize_image(card,segment,width,height,fps,duration,"none")
                             scene_repaired = True
                             warnings.append(f"Plan {shot.get('id')} réparé par citation fidèle : " + " ".join(checked["issues"]))
@@ -306,11 +308,9 @@ class FilmRenderer:
             filters, effect_warnings = build_video_filters(film.get("effects", []) or [], total_duration, width, height, targets, text_directory=work)
             warnings.extend(effect_warnings)
             applied_effect_count = len(filters)
-            subtitle_path = work / "captions.srt"
-            has_subtitles = write_srt(film.get("subtitles", []) or [], subtitle_path, (film.get("info") or {}).get("language"))
             styled = work / "styled.mp4"
             _memory("before_effects_subtitles")
-            await finish_video(assembled, styled, filters, subtitle_path if has_subtitles else None)
+            await finish_video(assembled, styled, filters, subtitle_path if has_subtitles else None,width=width,height=height)
             _memory("after_effects_subtitles")
             if progress_callback: await progress_callback(86, "effets et sous-titres terminés")
             audio = film.get("audio") or {}
