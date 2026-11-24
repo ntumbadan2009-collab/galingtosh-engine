@@ -39,8 +39,10 @@ export async function reviewTrial(cfg:LlmCfg,directory:string,priority:string){
  const hashes:Record<string,string>={};
  for(const [i,c] of manifest.candidates.entries()){
   if(c.id!==["A","B"][i]||!SHA.test(c.sha256)||c.report?.editorial_quality?.passed!==true||await sha(await Deno.readFile(directory+"/"+c.id+".mp4"))!==c.sha256)throw Error("trial_video_integrity");
+  if(c.filmSha256!==undefined&&(!SHA.test(c.filmSha256)||await sha(await Deno.readFile(directory+"/"+c.id+".film.json"))!==c.filmSha256))throw Error("trial_plan_integrity");
   hashes[c.id]=c.sha256;
  }
+ if(manifest.candidates.some((c:any)=>c.filmSha256!==undefined)&&!manifest.candidates.every((c:any)=>SHA.test(c.filmSha256)))throw Error("trial_plan_coverage");
  if(manifest.candidates[0].audioSha256!==manifest.candidates[1].audioSha256||manifest.candidates.some((c:any)=>c.report?.audio===true?!SHA.test(c.audioSha256):c.audioSha256!==null))throw Error("trial_audio_not_comparable");
  const rows:Verdict[]=[];let input=0,output=0;
  for(const [index,b] of manifest.pairedEvidence.entries()){
@@ -78,12 +80,20 @@ export async function applyTrialSelection(directory:string,review:Awaited<Return
  if(manifest.status!=="needs_artistic_review"||manifest.candidates?.length!==2)throw Error("trial_manifest_invalid");
  const hashes:Record<string,string>={};
  const bytes:Record<string,Uint8Array>={};
+ const plans:Record<string,Uint8Array>={};
+ const planHashes:Record<string,string>={};
  for(const [i,c] of manifest.candidates.entries()){
   if(c.id!==["A","B"][i]||c.report?.editorial_quality?.passed!==true||!SHA.test(c.sha256)||review.candidateHashes[c.id]!==c.sha256)throw Error("trial_candidate_changed");
   bytes[c.id]=await Deno.readFile(directory+"/"+c.id+".mp4");
   if(await sha(bytes[c.id])!==c.sha256)throw Error("trial_candidate_changed");
+  if(c.filmSha256!==undefined){
+   plans[c.id]=await Deno.readFile(directory+"/"+c.id+".film.json");
+   if(!SHA.test(c.filmSha256)||await sha(plans[c.id])!==c.filmSha256)throw Error("trial_plan_changed");
+   planHashes[c.id]=c.filmSha256;
+  }
   hashes[c.id]=c.sha256;
  }
+ if(Object.keys(plans).length!==0&&Object.keys(plans).length!==2)throw Error("trial_plan_coverage");
  if(manifest.candidates[0].audioSha256!==manifest.candidates[1].audioSha256)throw Error("trial_audio_not_comparable");
  const ids:string[]=[];
  for(const b of manifest.pairedEvidence){
@@ -95,14 +105,15 @@ export async function applyTrialSelection(directory:string,review:Awaited<Return
   ids.push(...pair.shots.map((s:{shotId:string})=>s.shotId));
  }
  parseVariantReview(JSON.stringify(review.rows),ids);
- const version=review.manifestSha256+"-"+winner;
+ const version=review.manifestSha256;
  const target=directory+"/selected-"+version;
- const receipt={version,winner,sha256:hashes[winner],manifestSha256:review.manifestSha256,status:"private_selection",review,publication:false};
+ const receipt={version,winner,sha256:hashes[winner],manifestSha256:review.manifestSha256,status:"private_selection",scope:plans[winner]?"scene_snapshot":"render_only",filmSha256:planHashes[winner]??null,review,publication:false};
  // Exclusive directory creation prevents concurrent replacements. Receipt last: without it
  // an interrupted selection must never be treated as committed.
  await Deno.mkdir(target);
  try{
   await Deno.writeFile(target+"/selected.mp4",bytes[winner],{createNew:true,mode:0o600});
+  if(plans[winner])await Deno.writeFile(target+"/selected.film.json",plans[winner],{createNew:true,mode:0o600});
   await Deno.writeTextFile(target+"/selection.json",JSON.stringify(receipt,null,2),{createNew:true,mode:0o600});
  }catch(e){await Deno.remove(target,{recursive:true});throw e;}
  return receipt;
