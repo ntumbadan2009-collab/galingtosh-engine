@@ -6,6 +6,7 @@ import { reviewActualSound } from "./sound.ts";
 import { STYLES,auditRhythm } from "./adaptive.ts";
 import {previewPrecisionRevision} from "./precision_revision.ts";
 import {auditFoundations} from "./foundations.ts";
+import {directorDiagnostics} from "./director_intelligence.ts";
 import { reviewDocumentary, researchIssues } from "./research.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
@@ -39,6 +40,7 @@ export const TOOLS: ToolDef[] = [
   tool("audit_editorial_rhythm","Mesure la diversité et les répétitions du montage planifié. Les constats sont des pistes de révision, pas des quotas ni des scores artistiques."),
   tool("set_editorial_profile","Enregistre le style éditorial uniquement si demandé ou clairement approuvé par l’utilisateur.",{style:E([...STYLES])},["style"]),
   tool("preview_precision_revision","Prépare une révision locale de 1 à 4 schémas existants sans enregistrer ni rendre la vidéo. Réservé à une demande ciblée; les citations, le son, les durées et tous les autres plans sont conservés.",{edits:{type:"array",items:{type:"object",properties:{shot_id:S(),visualType:E([...MOTION_TYPES]),visualItems:{type:"array",items:S()}},required:["shot_id","visualType","visualItems"]}}},["edits"]),
+  tool("audit_director_intelligence","Examine le plan entier, les plans courts, répétitions, raccords et fondations. Diagnostic de plan uniquement, aucun jugement du MP4."),
   tool("audit_production_foundations","Contrôle en lecture seule la narration, les médias réels vérifiés et la continuité du montage. Aide à décider les corrections avant une production complète."),
   tool("get_film", "Retourne le Film JSON complet de la version de travail."),
   tool("set_project_info", "Modifie titre, type, langue ou synopsis.",
@@ -260,6 +262,9 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const row=await loadWorking(ctx);
         const p=await previewPrecisionRevision(row.data,args.edits);
         return {output:{...p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId},metadata:{kind:"precision_revision",receipt:p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId}};
+      }
+      case "audit_director_intelligence": {
+        const row=await loadWorking(ctx);return {output:directorDiagnostics(row.data)};
       }
       case "audit_production_foundations": {
         const row=await loadWorking(ctx);return {output:auditFoundations(row.data)};
