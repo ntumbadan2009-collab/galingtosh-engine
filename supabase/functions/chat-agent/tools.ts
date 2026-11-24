@@ -6,7 +6,7 @@ import { reviewActualSound } from "./sound.ts";
 import { STYLES,auditRhythm } from "./adaptive.ts";
 import {previewPrecisionRevision} from "./precision_revision.ts";
 import {auditFoundations} from "./foundations.ts";
-import {directorDiagnostics} from "./director_intelligence.ts";
+import {directorDiagnostics,directorKey} from "./director_intelligence.ts";
 import { reviewDocumentary, researchIssues } from "./research.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
@@ -17,6 +17,7 @@ export interface Ctx {
   userId: string;
   authToken: string;
   productionMissionId?: string;
+  directorReviewKey?: string;
   conversationId: string;
   projectId: string | null;
   cfg: LlmCfg;
@@ -282,7 +283,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const beats = planNarrativeBeats(text, Number(scene.durationSec));
         return { output: {
           sceneId:scene.id, originalText:text, totalDurationSec:scene.durationSec, beats,
-          instruction:"Pour chaque phrase, cherche des médias vérifiables OU choisis une illustration typographique créée par code. N'utilise pas un plan générique non examiné."
+          instruction:"Pour chaque idée, privilégie 3 à 5 secondes par plan; justifie les exceptions. Cherche des médias réels vérifiables ou une illustration narrative fidèle. Ce minutage est estimatif, pas un alignement mot à mot."
         }};
       }
       case "measure_narration": {
@@ -589,7 +590,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const row = await loadWorking(ctx);
         const hasShots = (row.data.scenes ?? []).some((s: Json) => (s.shots ?? []).length > 0);
         if (!hasShots) throw new Error("Le film ne contient aucun plan : rien à rendre.");
-        if(ctx.productionMissionId){const f=auditFoundations(row.data);if(!f.passed)throw Error(f.issues.join(" "));}
+        if(ctx.productionMissionId){const f=auditFoundations(row.data);if(!f.passed)throw Error(f.issues.join(" "));if(ctx.directorReviewKey!==await directorKey(row.data,row.version,row.rev))throw Error("Le montage a changé depuis la revue indépendante.");}
         if (ctx.productionMissionId || row.data.info?.visualPolicy === "strict") {
           const issues=[...narrativePreflight(row.data),...researchIssues(row.data)];
           if(issues.length)throw Error("Les images doivent illustrer la narration : "+issues.slice(0,4).join(" "));
@@ -600,9 +601,28 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           const details = mismatches.map((x: Json) => `scène ${x.sceneId}: ${x.durationSec}s mesurées pour ${x.targetDurationSec}s visées`).join("; ");
           throw new Error(`Le rendu attend une narration ajustée : ${details}. Réécris uniquement les segments concernés avec set_scene_narration, préserve les faits, puis mesure à nouveau. Si le contenu disponible ne permet pas d'allonger la voix sans inventer, ajuste la durée cible de cette scène selon son contenu.`);
         }
-        if (measured.length) await mutateFilm(ctx, "align_narration_durations", { segments: measured });
+        if (measured.length) {
+          if(ctx.productionMissionId){
+            // Align only when the timing/provider actually changes. Persist
+            // via the original CAS; never silently change a reviewed plan.
+            const scenes=row.data.scenes??[];
+            const unchanged=measured.every((m:Json)=>{
+              const s=scenes.find((x:Json)=>x.id===m.sceneId);
+              return s&&Math.abs(Number(s.durationSec)-Number(m.durationSec))<.001&&
+                Math.abs(Number(s.narration?.measuredDurationSec)-Number(m.durationSec))<.001&&
+                (!m.ttsProvider||s.narration?.ttsProvider===m.ttsProvider);
+            });
+            if(!unchanged){
+              const {film}=applyOperation(row.data,"align_narration_durations",{segments:measured});
+              const {data:saved,error}=await ctx.admin.rpc("save_film_operation",{p_user_id:ctx.userId,p_film_id:row.id,p_rev:row.rev,p_data:film,p_op:{name:"align_narration_durations",args:{segments:measured}}});
+              if(error||!saved)throw Error("Conflit pendant l'alignement de la narration.");
+              throw Error("Durées TTS alignées : une nouvelle revue indépendante de cette version est nécessaire avant le rendu.");
+            }
+          }else await mutateFilm(ctx, "align_narration_durations", { segments: measured });
+        }
         if(ctx.productionMissionId){
           const aligned=await loadWorking(ctx);
+          if(ctx.directorReviewKey!==await directorKey(aligned.data,aligned.version,aligned.rev))throw Error("Version revue modifiée; relance la revue.");
           const f=auditFoundations(aligned.data);
           const issues=[...f.issues,...narrativePreflight(aligned.data),...researchIssues(aligned.data)];
           if(issues.length)throw Error("Après alignement réel de la voix : "+issues.slice(0,4).join(" "));
