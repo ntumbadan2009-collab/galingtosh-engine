@@ -3,6 +3,7 @@
 import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from "./film.ts";
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
 import { reviewActualSound } from "./sound.ts";
+import { STYLES,auditRhythm } from "./adaptive.ts";
 import { reviewDocumentary, researchIssues } from "./research.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
@@ -33,6 +34,8 @@ const tool = (name: string, description: string, properties: Json = {}, required
 export const TOOLS: ToolDef[] = [
   tool("create_project", "Crée un projet et son Film JSON vide, uniquement quand l'utilisateur demande clairement de commencer/enregistrer une production ou qu'une création est nécessaire pour exécuter sa demande. Ne pas appeler pour un salut, une question générale ou une simple exploration d'idée.",
     { title: S(), type: E(FILM_TYPES), language: S("code langue, ex. fr"), synopsis: S() }, ["title", "type"]),
+  tool("audit_editorial_rhythm","Mesure la diversité et les répétitions du montage planifié. Les constats sont des pistes de révision, pas des quotas ni des scores artistiques."),
+  tool("set_editorial_profile","Enregistre le style éditorial uniquement si demandé ou clairement approuvé par l’utilisateur.",{style:E([...STYLES])},["style"]),
   tool("get_film", "Retourne le Film JSON complet de la version de travail."),
   tool("set_project_info", "Modifie titre, type, langue ou synopsis.",
     { title: S(), type: E(FILM_TYPES), language: S(), synopsis: S() }),
@@ -106,7 +109,7 @@ export const TOOLS: ToolDef[] = [
 ];
 
 const FILM_OPS = new Set([
-  "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
+  "set_editorial_profile", "set_project_info", "set_format", "set_render_params", "add_character", "update_character",
   "add_scene", "update_scene", "remove_scene", "reorder_scenes", "add_shot", "add_code_shot", "turn_shot_into_code", "set_motion_visual", "update_shot", "remove_shot",
   "set_transition", "add_effect", "remove_effect", "add_audio_track", "remove_audio_track", "update_audio_track", "set_scene_narration", "align_narration_durations", "set_procedural_music", "set_editorial_accents", "set_scene_music", "update_subtitles",
 ]);
@@ -245,6 +248,10 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
     if (FILM_OPS.has(name)) return { output: await mutateFilm(ctx, name, args) };
 
     switch (name) {
+      case "audit_editorial_rhythm": {
+        const row=await loadWorking(ctx);
+        return {output:auditRhythm(row.data)};
+      }
       case "get_film": {
         const row = await loadWorking(ctx);
         return { output: { version: row.version, rev: row.rev, film: row.data } };

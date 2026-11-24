@@ -2,6 +2,7 @@
 // L'agent ne modifie jamais le JSON autrement que par applyOperation().
 
 import { quotedFromNarration, verifiedVisualEvidence, motionSpecIssues, MOTION_TYPES } from "./narrative.ts";
+import { STYLES } from "./adaptive.ts";
 export type Json = Record<string, any>;
 
 export const ASPECTS: Record<string, [number, number]> = {
@@ -136,6 +137,11 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       if(a.review?.reviewedBy!=="retrieved_text_review_v1"||a.review?.reviewedNarration!==text)fail("La narration a changé depuis le contrôle documentaire.");
       scene.researchEvidence=a.review;
       result={scene_id:scene.id,reviewed:true};
+      break;
+    }
+    case "set_editorial_profile": {
+      f.info.editorialProfile=oneOf(a.style,"style",[...STYLES]);
+      result={style:f.info.editorialProfile};
       break;
     }
     case "set_project_info": {
