@@ -5,6 +5,7 @@ import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
 import { reviewActualSound } from "./sound.ts";
 import { STYLES,auditRhythm } from "./adaptive.ts";
 import {previewPrecisionRevision} from "./precision_revision.ts";
+import {auditFoundations} from "./foundations.ts";
 import { reviewDocumentary, researchIssues } from "./research.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
@@ -38,6 +39,7 @@ export const TOOLS: ToolDef[] = [
   tool("audit_editorial_rhythm","Mesure la diversité et les répétitions du montage planifié. Les constats sont des pistes de révision, pas des quotas ni des scores artistiques."),
   tool("set_editorial_profile","Enregistre le style éditorial uniquement si demandé ou clairement approuvé par l’utilisateur.",{style:E([...STYLES])},["style"]),
   tool("preview_precision_revision","Prépare une révision locale de 1 à 4 schémas existants sans enregistrer ni rendre la vidéo. Réservé à une demande ciblée; les citations, le son, les durées et tous les autres plans sont conservés.",{edits:{type:"array",items:{type:"object",properties:{shot_id:S(),visualType:E([...MOTION_TYPES]),visualItems:{type:"array",items:S()}},required:["shot_id","visualType","visualItems"]}}},["edits"]),
+  tool("audit_production_foundations","Contrôle en lecture seule la narration, les médias réels vérifiés et la continuité du montage. Aide à décider les corrections avant une production complète."),
   tool("get_film", "Retourne le Film JSON complet de la version de travail."),
   tool("set_project_info", "Modifie titre, type, langue ou synopsis.",
     { title: S(), type: E(FILM_TYPES), language: S(), synopsis: S() }),
@@ -258,6 +260,9 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const row=await loadWorking(ctx);
         const p=await previewPrecisionRevision(row.data,args.edits);
         return {output:{...p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId},metadata:{kind:"precision_revision",receipt:p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId}};
+      }
+      case "audit_production_foundations": {
+        const row=await loadWorking(ctx);return {output:auditFoundations(row.data)};
       }
       case "get_film": {
         const row = await loadWorking(ctx);
@@ -579,6 +584,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const row = await loadWorking(ctx);
         const hasShots = (row.data.scenes ?? []).some((s: Json) => (s.shots ?? []).length > 0);
         if (!hasShots) throw new Error("Le film ne contient aucun plan : rien à rendre.");
+        if(ctx.productionMissionId){const f=auditFoundations(row.data);if(!f.passed)throw Error(f.issues.join(" "));}
         if (ctx.productionMissionId || row.data.info?.visualPolicy === "strict") {
           const issues=[...narrativePreflight(row.data),...researchIssues(row.data)];
           if(issues.length)throw Error("Les images doivent illustrer la narration : "+issues.slice(0,4).join(" "));
