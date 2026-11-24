@@ -82,6 +82,8 @@ def render_code_card(
     draw.text(p(126, 93), f"SÉQUENCE {max(1,int(scene_number)):02d}", font=small, fill=accent)
     label = (str(scene_title or "").strip() or "Illustration narrative")[:90]
     regular = _font(FONT_REGULAR, max(12, round(23*unit)))
+    while label and draw.textbbox((0,0),label,font=regular)[2] > round(1010*sx):
+        label=label[:-1]
     draw.text(p(126, 133), label, font=regular, fill=(181, 190, 206))
     quote = narration_quote.strip()
     wrap_width = round(1010*sx)
@@ -90,12 +92,11 @@ def render_code_card(
         font = _font(FONT_BOLD, font_size)
         lines = _fit_lines(draw, quote, font, wrap_width)
         line_h = int(font_size*1.42)
-        if len(lines)*line_h <= round(325*sy) and len(lines) <= 8:
+        if len(lines)*line_h <= round(325*sy) and len(lines) <= 8 and all(draw.textbbox((0,0),line,font=font)[2]<=wrap_width for line in lines):
             break
     else:
-        font = _font(FONT_BOLD, max(13, round(29*unit)))
-        lines = _fit_lines(draw, quote, font, wrap_width)
-        line_h = round(37*unit)
+        img.close()
+        raise ValueError("Citation trop longue pour rester lisible : scinder le plan.")
     y = int(252*sy) - min(0, (len(lines)-3)*int(line_h*0.13))
     for line in lines:
         draw.text((round(126*sx), y), line, font=font, fill=(245, 247, 252))

@@ -207,8 +207,11 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         }
         scene.durationSec = targetDurationSec;
       }
+      const ratePercent=numIn(a.ratePercent??scene.narration?.ratePercent??0,"ratePercent",-20,20);
+      const pitchHz=numIn(a.pitchHz??scene.narration?.pitchHz??0,"pitchHz",-12,12);
+      if(!Number.isInteger(ratePercent)||!Number.isInteger(pitchHz))fail("Direction vocale : valeurs entières requises.");
       scene.narration = {
-        text,
+        text,ratePercent,pitchHz,
         targetDurationSec,
         language: str(a.language ?? f.info.language ?? "fr", "language", 10),
         voice: str(a.voice ?? "default", "voice", 80),

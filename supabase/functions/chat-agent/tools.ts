@@ -46,7 +46,7 @@ export const TOOLS: ToolDef[] = [
   tool("update_scene", "Modifie une scène existante (champs partiels).",
     { scene_id: S(), title: S(), narrativeGoal: S(), durationSec: N(), mood: S(), characters: { type: "array", items: S() } }, ["scene_id"]),
   tool("set_scene_narration", "Écrit ou révise la narration d'une scène précise. Le texte est synthétisé séparément et commence au début de cette scène; il ne déborde pas dans la suivante. targetDurationSec indique la durée visée par l'IA après mesure TTS.",
-    { scene_id: S(), text: S("narration factuelle de cette scène, maximum 4000 caractères"), targetDurationSec: N("durée visée en secondes; par défaut la durée actuelle de la scène"), language: S(), voice: S() }, ["scene_id", "text"]),
+    { scene_id: S(), text: S("narration factuelle de cette scène, maximum 4000 caractères"), targetDurationSec: N("durée visée en secondes; par défaut la durée actuelle de la scène"), language: S(), voice: S(),ratePercent:N("Débit vocal entier, de -20 à +20 pour cent"),pitchHz:N("Hauteur vocale entière de -12 à +12 Hz") }, ["scene_id", "text"]),
   tool("measure_narration", "Synthétise provisoirement chaque narration de scène et renvoie sa durée TTS réelle sans modifier le film. Obligatoire avant le rendu; révise les textes dont la durée s'écarte de la cible, puis remesure.", {}),
   tool("remove_scene", "Supprime une scène et ses plans.", { scene_id: S() }, ["scene_id"]),
   tool("reorder_scenes", "Réordonne les scènes : fournir TOUS les ids dans le nouvel ordre.", { scene_ids: { type: "array", items: S() } }, ["scene_ids"]),
@@ -156,6 +156,7 @@ async function measureNarrations(ctx: Ctx, film: Json) {
     if (!narration || typeof narration.text !== "string" || !narration.text.trim()) return [];
     return [{ sceneId: String(scene.id), text: narration.text, voice: narration.voice ?? "default",
       language: narration.language ?? film.info?.language ?? "fr",
+      ratePercent:narration.ratePercent??0,pitchHz:narration.pitchHz??0,ttsProvider:narration.ttsProvider??"edge-tts",
       targetDurationSec: narration.targetDurationSec ?? scene.durationSec }];
   });
   if (!segments.length) return [];

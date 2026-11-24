@@ -3,6 +3,7 @@ from pathlib import Path
 from app.core.narrative_policy import excerpt_matches, MAX_CODE_CARD_SECONDS
 from app.media.ffmpeg import probe_media, FFmpegError
 import math
+from PIL import Image
 
 def replace_with_grounded_card(scene: dict, shot: dict) -> bool:
     evidence = shot.get("visualEvidence") or {}
@@ -23,6 +24,7 @@ async def repair_unavailable_media(film: dict, files: dict[str,Path]) -> list[st
     media = {m.get("id"):m for m in film.get("media",[])}
     warnings=[]
     durations={}
+    valid_images={}
     for scene in film.get("scenes",[]):
         for shot in scene.get("shots",[]):
             ref=shot.get("mediaRef")
@@ -41,6 +43,16 @@ async def repair_unavailable_media(film: dict, files: dict[str,Path]) -> list[st
                 end=float(shot.get("sourceInSec",0))+float(shot["outSec"])-float(shot["inSec"])
                 if not math.isfinite(durations[ref]) or end>durations[ref]+.06:
                     reason="séquence source trop courte ou illisible"
+            elif media.get(ref,{}).get("kind") == "image":
+                if ref not in valid_images:
+                    try:
+                        with Image.open(path) as im:
+                            im.verify()
+                        valid_images[ref]=True
+                    except (OSError, ValueError, Image.DecompressionBombError):
+                        valid_images[ref]=False
+                if not valid_images[ref]:
+                    reason="image source corrompue"
             if reason and replace_with_grounded_card(scene,shot):
                 warnings.append(f"Plan {shot.get('id')}: {reason}; remplacé par une citation fidèle, durée conservée.")
     return warnings

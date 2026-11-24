@@ -183,6 +183,8 @@ class TaskManager:
                         media_warnings.append("Piste musicale importée ignorée : seule la musique procédurale par scène est utilisée.")
                     continue
                 if track.get("kind") != "sfx": continue
+                if track.get("disabled"):
+                    continue
                 expected = str(track.get("expectedContent") or "").strip()
                 fallback = workdir / f"generated_sfx_{track.get('id','sound')}.wav"
                 duration = max((float(e.get("durationSec",2)) for e in track.get("events",[]) if isinstance(e,dict)),default=2.0)

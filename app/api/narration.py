@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.media.tts import release_piper_voice, synthesize_text_with_provider
+from app.media.tts import release_piper_voice, synthesize_text_with_provider, voice_direction
 
 router = APIRouter(prefix="/narration", tags=["narration"])
 _rate: dict[str, list[float]] = {}
@@ -42,6 +42,10 @@ async def measure(payload: dict[str, Any], request: Request):
     for segment in segments:
         if not isinstance(segment.get("text"), str) or not segment["text"].strip() or len(segment["text"]) > 4000:
             raise HTTPException(status_code=422, detail="Chaque narration doit contenir de 1 à 4000 caractères.")
+        try:
+            voice_direction(segment.get("ratePercent",0),segment.get("pitchHz",0))
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from None
         target = segment.get("targetDurationSec")
         if target is not None and (not isinstance(target, (int, float)) or isinstance(target, bool) or not 0.5 <= target <= 3600):
             raise HTTPException(status_code=422, detail="Durée cible de narration invalide.")
@@ -55,7 +59,8 @@ async def measure(payload: dict[str, Any], request: Request):
                 try:
                     seconds, provider = await synthesize_text_with_provider(segment["text"],
                         str(segment.get("language") or "fr"), segment.get("voice"),
-                        root / f"scene-{index}.mp3", str(segment.get("ttsProvider") or "edge-tts"))
+                        root / f"scene-{index}.mp3", str(segment.get("ttsProvider") or "edge-tts"),
+                        segment.get("ratePercent",0),segment.get("pitchHz",0))
                 except Exception as exc:
                     logger.warning("Mesure TTS scène %d échouée : %s.", index + 1, str(exc)[:240])
                     raise HTTPException(status_code=503, detail=f"La durée TTS de la scène {index + 1} n'a pas pu être mesurée.") from None

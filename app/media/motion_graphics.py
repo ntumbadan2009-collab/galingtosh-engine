@@ -75,7 +75,7 @@ def _fitted(draw: ImageDraw.ImageDraw, text: str, box, *, strong: bool, tint):
     for px in range(max_size,minimum-1,-2):
         f=_font(px,strong);lines=_wrap(draw,text,f,w)
         line_h=max(px+6,int(px*1.28))
-        if len(lines)*line_h <= h:
+        if len(lines)*line_h <= h and all(draw.textbbox((0,0),line,font=f)[2]<=w for line in lines):
             break
     else:
         raise ValueError("Texte de schéma trop long pour rester lisible.")
