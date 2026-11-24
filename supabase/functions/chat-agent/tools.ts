@@ -4,6 +4,7 @@ import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from 
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
 import { reviewActualSound } from "./sound.ts";
 import { STYLES,auditRhythm } from "./adaptive.ts";
+import {previewPrecisionRevision} from "./precision_revision.ts";
 import { reviewDocumentary, researchIssues } from "./research.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
@@ -36,6 +37,7 @@ export const TOOLS: ToolDef[] = [
     { title: S(), type: E(FILM_TYPES), language: S("code langue, ex. fr"), synopsis: S() }, ["title", "type"]),
   tool("audit_editorial_rhythm","Mesure la diversité et les répétitions du montage planifié. Les constats sont des pistes de révision, pas des quotas ni des scores artistiques."),
   tool("set_editorial_profile","Enregistre le style éditorial uniquement si demandé ou clairement approuvé par l’utilisateur.",{style:E([...STYLES])},["style"]),
+  tool("preview_precision_revision","Prépare une révision locale de 1 à 4 schémas existants sans enregistrer ni rendre la vidéo. Réservé à une demande ciblée; les citations, le son, les durées et tous les autres plans sont conservés.",{edits:{type:"array",items:{type:"object",properties:{shot_id:S(),visualType:E([...MOTION_TYPES]),visualItems:{type:"array",items:S()}},required:["shot_id","visualType","visualItems"]}}},["edits"]),
   tool("get_film", "Retourne le Film JSON complet de la version de travail."),
   tool("set_project_info", "Modifie titre, type, langue ou synopsis.",
     { title: S(), type: E(FILM_TYPES), language: S(), synopsis: S() }),
@@ -251,6 +253,11 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
       case "audit_editorial_rhythm": {
         const row=await loadWorking(ctx);
         return {output:auditRhythm(row.data)};
+      }
+      case "preview_precision_revision": {
+        const row=await loadWorking(ctx);
+        const p=await previewPrecisionRevision(row.data,args.edits);
+        return {output:{...p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId},metadata:{kind:"precision_revision",receipt:p.receipt,filmId:row.id,version:row.version,rev:row.rev,projectId:ctx.projectId}};
       }
       case "get_film": {
         const row = await loadWorking(ctx);
