@@ -95,3 +95,29 @@ async def test_manifest_only_written_after_all_segments(checkpoint, tmp_path):
     ], tmp_path)
     assert not result
     assert ("temp-assets", manifest) not in checkpoint.db.objects
+
+@pytest.mark.asyncio
+async def test_checkpoint_rejects_late_bad_entry_without_partial_restore(checkpoint,tmp_path):
+    sig=fingerprint({"test":"late_bad_entry"})
+    source=tmp_path/"source";source.mkdir()
+    work=tmp_path/"restore";work.mkdir()
+    (source/"segment_0000.mp4").write_bytes(b"one")
+    (source/"segment_0001.mp4").write_bytes(b"two")
+    assert await checkpoint.save(0,sig,[{"name":"segment_0000.mp4","duration":1},{"name":"segment_0001.mp4","duration":1}],source)
+    manifest=("temp-assets",checkpoint.prefix(0,sig)+"/manifest.json")
+    obj=json.loads(checkpoint.db.objects[manifest])
+    obj["segments"][1]["duration"]=float("nan")
+    checkpoint.db.objects[manifest]=json.dumps(obj).encode()
+    assert await checkpoint.restore(0,sig,work) is None
+    assert not list(work.iterdir())
+
+@pytest.mark.asyncio
+async def test_checkpoint_does_not_overwrite_previous_scene(checkpoint,tmp_path):
+    sig=fingerprint({"test":"collision"})
+    source=tmp_path/"source";source.mkdir()
+    work=tmp_path/"restore";work.mkdir()
+    (source/"segment_0000.mp4").write_bytes(b"cached")
+    (work/"segment_0000.mp4").write_bytes(b"previous scene")
+    assert await checkpoint.save(0,sig,[{"name":"segment_0000.mp4","duration":1}],source)
+    assert await checkpoint.restore(0,sig,work) is None
+    assert (work/"segment_0000.mp4").read_bytes()==b"previous scene"
