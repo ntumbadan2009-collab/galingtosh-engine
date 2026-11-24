@@ -27,7 +27,7 @@ jobs:
       - name: Verify selection and refusal on private fixture
         run: deno test --allow-read --allow-write scripts/trial_selection_test.ts
       - name: Independent real-provider review (public NASA test only)
-        if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/level-6-adaptive-director')
+        if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feature/level-6-adaptive-director' || github.event.pull_request.head.ref == 'feature/levels-9-12-consolidation'))
         env:
           LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
