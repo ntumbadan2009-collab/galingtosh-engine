@@ -19,12 +19,13 @@ from app.media.ffmpeg import run_ffmpeg
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-VISUAL_TYPES = {"focus", "steps", "timeline", "comparison"}
+VISUAL_TYPES = {"focus", "steps", "timeline", "comparison", "cause_effect"}
 PALETTE = {
     "focus": ((10, 23, 42), (108, 229, 201)),
     "steps": ((12, 29, 44), (104, 205, 250)),
     "timeline": ((23, 23, 47), (192, 153, 255)),
     "comparison": ((33, 23, 40), (251, 170, 123)),
+    "cause_effect": ((13, 35, 38), (95, 231, 195)),
 }
 FRAME_RATE = 8
 
@@ -142,11 +143,11 @@ def _draw_frame(*, width:int,height:int,kind:str,items:list[dict],scene_title:st
         stripe=max(4,round(5*unit))
         _rounded(d,(x0+14,y0+14,x0+14+stripe,y1-14),stripe,fill=_mix(bg,accent,fade))
         tag_col=_mix(bg,accent,fade)
-        number=chr(65+i) if kind=="comparison" else f"{i+1:02d}"
+        number=("CAUSE" if i==0 else "EFFET") if kind=="cause_effect" else chr(65+i) if kind=="comparison" else f"{i+1:02d}"
         label(number,x0+round(34*unit),y0+round(21*unit),max(16,round(29*unit)),tag_col,True)
         mid=(x0+round(30*unit),y0+round(64*unit),x1-round(24*unit),y1-round(18*unit))
         _fitted(d,str(item["text"]),mid,strong=True,tint=_mix(bg,(250,251,253),fade))
-        if kind=="steps" and i<count-1 and fade>.4:
+        if kind in {"steps","cause_effect"} and i<count-1 and fade>.4:
             # Subtle directional relationship, without invented numeric metrics.
             if height>width:
                 px=(x0+x1)//2
@@ -176,7 +177,7 @@ def render_motion_frames(folder: Path, *, spec:dict[str,Any], scene_title:str,
     items=spec.get("items")
     if kind not in VISUAL_TYPES or not isinstance(items,list) or len(items) not in (1,2,3,4):
         raise ValueError("Spécification de graphique narratif invalide.")
-    if (kind=="focus" and len(items)!=1 or kind=="comparison" and len(items)!=2
+    if (kind=="focus" and len(items)!=1 or kind in {"comparison","cause_effect"} and len(items)!=2
         or kind in {"steps","timeline"} and len(items)<2):
         raise ValueError("Nombre d'étapes incorrect pour ce type de schéma.")
     if any(not isinstance(item,dict) or not isinstance(item.get("text"),str)

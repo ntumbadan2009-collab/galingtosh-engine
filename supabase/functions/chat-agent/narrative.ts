@@ -89,7 +89,7 @@ export function narrativePreflight(film: any): string[] {
   return problems;
 }
 
-export const MOTION_TYPES = ["focus", "steps", "timeline", "comparison"] as const;
+export const MOTION_TYPES = ["focus", "steps", "timeline", "comparison", "cause_effect"] as const;
 
 const TEMPORAL = /(?:puis|ensuite|après|avant|d'abord|premièrement|secondement|troisièmement|initialement|finalement|au début|à la fin|then|before|after|first|next|finally)|\b(?:19|20)\d{2}\b/iu;
 const CONTRAST = /(?:mais|cependant|pourtant|tandis que|alors que|contrairement|différent|différence|par contre|en revanche|but|while|unlike|versus)/iu;
@@ -105,7 +105,7 @@ export function motionSpecIssues(scene: any, shot: any): string[] {
   if (!MOTION_TYPES.includes(kind) || !Array.isArray(items))
     return ["Type de schéma ou éléments invalides."];
   const count = items.length;
-  if (kind === "focus" && count !== 1 ||
+  if (kind === "cause_effect" && count !== 2 || kind === "focus" && count !== 1 ||
       kind === "comparison" && count !== 2 ||
       ["steps", "timeline"].includes(kind) && (count < 2 || count > 4))
     return ["Nombre d'éléments non pris en charge pour ce schéma."];
@@ -116,6 +116,7 @@ export function motionSpecIssues(scene: any, shot: any): string[] {
     return ["Une chronologie exige une suite temporelle explicite."];
   if (kind === "comparison" && !CONTRAST.test(quote))
     return ["Une comparaison exige un contraste explicite dans le récit."];
+  if (kind === "cause_effect" && !/\b(?:donc|entraîne|provoque|conduit à|en conséquence|therefore|causes|leads to)\b/iu.test(quote)) return ["La causalité doit être explicitement narrée dans cet ordre."];
   let cursor=0;
   for (let i=0;i<count;i++) {
     const item=items[i];

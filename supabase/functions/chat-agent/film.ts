@@ -262,6 +262,13 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         if (Number.isFinite(Number(cue.startSec))) cue.startSec = Math.max(0, remapTime(Number(cue.startSec)));
         if (Number.isFinite(Number(cue.endSec))) cue.endSec = Math.max(0, remapTime(Number(cue.endSec)));
       }
+      if (f.info?.editorialLevel === 3) for (const track of f.audio?.tracks ?? []) for (const event of track.events ?? []) {
+        const start = Number(event.startSec), end = start + Number(event.durationSec);
+        if (Number.isFinite(start) && Number.isFinite(end)) {
+          event.startSec = Math.max(0, remapTime(start));
+          event.durationSec = Math.max(0.001, remapTime(end)-remapTime(start));
+        }
+      }
       result = { aligned_scenes: aligned };
       break;
     }

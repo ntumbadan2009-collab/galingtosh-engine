@@ -1,5 +1,6 @@
 from pathlib import Path
 from app.media.ffmpeg import run_ffmpeg
+from app.media.editorial_motion import zoom_filter
 
 async def normalize_image(source: Path, destination: Path, width: int, height: int, fps: int, duration: float, camera: str = "none") -> None:
     frames = max(1, round(duration * fps))
@@ -14,7 +15,9 @@ async def normalize_image(source: Path, destination: Path, width: int, height: i
     vf = "scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1".format(
         sw=width, sh=height, w=width, h=height
     )
-    if camera in motion:
+    if camera in {"zoom_in","zoom_out"}:
+        vf += "," + zoom_filter(camera,width,height,fps,duration)
+    elif camera in motion:
         vf += "," + motion[camera].format(w=width, h=height, fps=fps, frames=frames)
     else:
         vf += ",fps={}".format(fps)

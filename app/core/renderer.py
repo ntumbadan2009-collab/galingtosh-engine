@@ -4,6 +4,8 @@ import shutil
 import tempfile
 import logging
 import gc
+import asyncio
+from app.media.editorial_motion import accent_events, render_accents
 from app.core.checkpoints import SceneCheckpoints, fingerprint
 from pathlib import Path
 from typing import Any, Callable, Awaitable
@@ -305,6 +307,12 @@ class FilmRenderer:
                                # phone speakers. Keep it below narration but
                                # enforce a modest audible floor.
                                "volumeDb":max(-8.0, min(0.0, float(music.get("volumeDb", -8))))})
+            accents = accent_events(film) if editorial else []
+            if accents:
+                accent_path = work / "editorial_accents.wav"
+                await asyncio.to_thread(render_accents, accents, total_duration, accent_path)
+                media_files = {**media_files, "__editorial_accents": accent_path}
+                tracks.append({"id":"__editorial_accents","kind":"sfx","mediaRef":"__editorial_accents","volumeDb":-10})
             has_audio, audio_warnings = await mix_audio(styled, tracks, media_files, output,
                 total_duration, (film.get("render") or {}).get("audioBitrateKbps", 128), editorial=editorial)
             warnings.extend(audio_warnings)
@@ -344,7 +352,7 @@ class FilmRenderer:
                 "width": video.get("width"), "height": video.get("height"), "fps": fps,
                 "size_mb": round(size_mb, 3), "compression": compression, "warnings": list(dict.fromkeys(warnings)),
                 "audio": any(s.get("codec_type") == "audio" for s in streams),
-                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa}
+                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa, "editorial_accents": accents}
         except (OSError, FFmpegError) as exc:
             raise RenderError(str(exc)) from None
         finally:

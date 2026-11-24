@@ -10,7 +10,8 @@ import re
 import unicodedata
 from typing import Any
 
-KINDS = {"focus", "steps", "timeline", "comparison"}
+KINDS = {"focus", "steps", "timeline", "comparison", "cause_effect"}
+CAUSAL = re.compile(r"\b(?:donc|entraîne|provoque|conduit à|en conséquence|therefore|causes|leads to)\b", re.IGNORECASE)
 TEMPORAL = re.compile(
     r"\b(?:puis|ensuite|après|avant|d'abord|premièrement|secondement|"
     r"troisièmement|initialement|finalement|au début|à la fin|"
@@ -41,7 +42,7 @@ def motion_spec_issues(narration: Any, quote: Any, spec: Any) -> list[str]:
         return ["Type graphique ou liste d'éléments invalide."]
     count = len(items)
     if ((kind == "focus" and count != 1)
-        or (kind == "comparison" and count != 2)
+        or (kind in {"comparison", "cause_effect"} and count != 2)
         or (kind in {"steps", "timeline"} and not 2 <= count <= 4)):
         return ["Nombre de blocs narratifs non pris en charge."]
     source = _norm(narration)
@@ -52,6 +53,8 @@ def motion_spec_issues(narration: Any, quote: Any, spec: Any) -> list[str]:
         return ["La chronologie exige un ordre temporel explicite dans la narration."]
     if kind == "comparison" and not CONTRAST.search(quoted):
         return ["La comparaison exige un contraste explicite dans la narration."]
+    if kind == "cause_effect" and not CAUSAL.search(quoted):
+        return ["La relation de cause à effet doit être explicitement narrée dans cet ordre."]
     cursor = 0
     for i, element in enumerate(items):
         if not isinstance(element, dict) or set(element) != {"text"}:
