@@ -21,6 +21,7 @@ from app.media.images import normalize_image
 from app.media.video import normalize_video
 from app.media.transitions import assemble_segments
 from app.media.audio import mix_audio
+from app.media.final_audio_review import inspect_final_audio
 from app.media.compression import fit_mp4_to_limit
 from app.media.procedural import compose_bed
 from app.media.creative_music import compose_score
@@ -363,6 +364,13 @@ class FilmRenderer:
                 qa = await inspect_render(output, probe, total_duration, bool(expected), voices, fps)
                 if not qa["passed"]:
                     raise RenderError("Contrôle qualité : " + " ".join(qa["issues"]))
+            audio_review = {"version":1,"status":"no_audio","semantic_audio_review":"not_performed"}
+            if editorial and has_audio:
+                try:
+                    audio_review = await inspect_final_audio(output, total_duration)
+                except (FFmpegError, ValueError, asyncio.TimeoutError):
+                    audio_review = {"version":1,"status":"unavailable","semantic_audio_review":"not_performed"}
+                    warnings.append("Mesure sonore finale indisponible; écoute humaine recommandée.")
             _memory("render_complete")
             streams = probe.get("streams", [])
             video = next((s for s in streams if s.get("codec_type") == "video"), {})
@@ -370,7 +378,7 @@ class FilmRenderer:
                 "width": video.get("width"), "height": video.get("height"), "fps": fps,
                 "size_mb": round(size_mb, 3), "compression": compression, "warnings": list(dict.fromkeys(warnings)),
                 "audio": any(s.get("codec_type") == "audio" for s in streams),
-                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa, "editorial_accents": accents, "editorial_level": (film.get("info") or {}).get("editorialLevel")}
+                "subtitles_burned": has_subtitles, "effects_applied": applied_effect_count, "editorial_quality": qa, "final_audio_review": audio_review, "editorial_accents": accents, "editorial_level": (film.get("info") or {}).get("editorialLevel")}
         except (OSError, FFmpegError) as exc:
             raise RenderError(str(exc)) from None
         finally:
