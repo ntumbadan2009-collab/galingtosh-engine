@@ -3,6 +3,7 @@
 import { applyOperation, defaultFilm, FILM_TYPES, MEDIA_KINDS, type Json } from "./film.ts";
 import { describeImage, type LlmCfg, type ToolDef } from "./llm.ts";
 import { reviewActualSound } from "./sound.ts";
+import { reviewDocumentary, researchIssues } from "./research.ts";
 import { MEDIA_SEARCH_KINDS, MEDIA_SOURCES, searchMedia, loadMediaKeys } from "./media.ts";
 import { planNarrativeBeats, quotedFromNarration, narrativePreflight, MOTION_TYPES,
          MIN_RELEVANCE, MIN_VISUAL_QUALITY } from "./narrative.ts";
@@ -77,6 +78,7 @@ export const TOOLS: ToolDef[] = [
   tool("add_audio_track", "Ajoute une voix off ou une piste procédurale. Pour un effet sfx, donne expectedContent (pas, impact, pluie, vent ou whoosh) et ses événements temporels; le moteur le synthétise en Python, sans banque de sons ni CLAP. Les demandes non prises en charge sont omises avec un avertissement.",
     { kind: E(["voiceover", "dialogue", "sfx"]), mediaRef: S("référence d'un fichier audio du projet pour narration/dialogue; ne pas utiliser pour sfx"), expectedContent: S(), tts: { type: "object", properties: { text: S(), provider: S(), voice: S(), language: S() }, required: ["text"] },
       events: { type: "array", items: { type: "object", properties: { startSec: N(), durationSec: N() }, required: ["startSec", "durationSec"] } }, volumeDb: N() }, ["kind"]),
+  tool("review_documentary_scene","Contrôle les affirmations factuelles d’une scène documentaire/éducative avec de véritables extraits récupérés de Wikipédia, Crossref et Europe PMC. Réécris les affirmations insuffisamment étayées; ne prétends pas qu’elles sont vérifiées. Donne query dans la langue du film et englishQuery pour les publications.",{scene_id:S(),query:S(),englishQuery:S()},["scene_id","query"]),
   tool("verify_and_add_sound","Vérifie un vrai effet audio trouvé par search_media puis add_found_media (Wikimedia/Openverse original CC0 ou CC BY), écoute l'extrait réel avec le modèle audio, vérifie la pertinence pour un plan et le place uniquement si accepté. Ne jamais utiliser les titres ou tags comme preuve. En cas de refus, chercher un autre son ou synthétiser un effet pris en charge.",{shot_id:S(),media_asset_id:S(),expectedContent:S(),narrationQuote:S(),sourceInSec:N(),durationSec:N(),offsetSec:N()},["shot_id","media_asset_id","expectedContent","narrationQuote","durationSec"]),
   tool("remove_audio_track", "Supprime une piste audio.", { track_id: S() }, ["track_id"]),
   tool("update_audio_track", "Corrige localement volume ou placement d'une piste existante, sans modifier les autres pistes.",
@@ -494,6 +496,16 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           evidenceLevel:row.kind==="video"?"three_reviewed_real_frames":"reviewed_real_image",
           inspectedFrameCount:samples.length,minimumRelevance:Math.min(...samples.map(v=>v.relevance))}};
       }
+      case "review_documentary_scene": {
+        const row=await loadWorking(ctx);
+        const scene=(row.data.scenes??[]).find((s:Json)=>s.id===args.scene_id);
+        const narration=scene?.narration?.text??scene?.narrativeGoal??"";
+        if(!scene||typeof narration!=="string"||!narration.trim())throw Error("Écris la narration avant de rechercher les preuves.");
+        const result=await reviewDocumentary(ctx.cfg,narration,String(args.query??""),String(args.englishQuery??""),String(row.data.info?.language??"fr").split("-")[0]);
+        ctx.usage.input+=result.usage.input;ctx.usage.output+=result.usage.output;
+        const saved=await mutateFilm(ctx,"record_documentary_review",{scene_id:scene.id,review:result.review});
+        return {output:{...saved,review:result.review,passed:result.review.claims.every((c:any)=>c.status==="supported")}};
+      }
       case "verify_and_add_sound": {
         const working=await loadWorking(ctx);
         if(![4,5].includes(working.data.info?.editorialLevel))throw Error("Contrôle sonore réservé aux niveaux 4 et 5.");
@@ -554,7 +566,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         const hasShots = (row.data.scenes ?? []).some((s: Json) => (s.shots ?? []).length > 0);
         if (!hasShots) throw new Error("Le film ne contient aucun plan : rien à rendre.");
         if (ctx.productionMissionId || row.data.info?.visualPolicy === "strict") {
-          const issues=narrativePreflight(row.data);
+          const issues=[...narrativePreflight(row.data),...researchIssues(row.data)];
           if(issues.length)throw Error("Les images doivent illustrer la narration : "+issues.slice(0,4).join(" "));
         }
         const measured = await measureNarrations(ctx, row.data);

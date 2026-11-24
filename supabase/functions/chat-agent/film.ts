@@ -124,6 +124,20 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
   let result: Json = {};
 
   switch (name) {
+    case "activate_autonomous_level5": {
+      f.info.visualPolicy="strict";
+      f.info.editorialLevel=5;
+      result={editorialLevel:5,visualPolicy:"strict"};
+      break;
+    }
+    case "record_documentary_review": {
+      const scene=findScene(f,req(a,"scene_id"));
+      const text=scene.narration?.text??scene.narrativeGoal??"";
+      if(a.review?.reviewedBy!=="retrieved_text_review_v1"||a.review?.reviewedNarration!==text)fail("La narration a changé depuis le contrôle documentaire.");
+      scene.researchEvidence=a.review;
+      result={scene_id:scene.id,reviewed:true};
+      break;
+    }
     case "set_project_info": {
       if (a.title !== undefined) f.info.title = str(a.title, "title", 200);
       if (a.type !== undefined) f.info.type = oneOf(a.type, "type", FILM_TYPES);
@@ -210,6 +224,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const ratePercent=numIn(a.ratePercent??scene.narration?.ratePercent??0,"ratePercent",-20,20);
       const pitchHz=numIn(a.pitchHz??scene.narration?.pitchHz??0,"pitchHz",-12,12);
       if(!Number.isInteger(ratePercent)||!Number.isInteger(pitchHz))fail("Direction vocale : valeurs entières requises.");
+      if(scene.narration?.text!==text)delete scene.researchEvidence;
       scene.narration = {
         text,ratePercent,pitchHz,
         targetDurationSec,
