@@ -72,7 +72,7 @@ async def download_public_media(url: str, destination: Path, max_bytes: int = MA
     try:
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             for hop in range(4):
-                async with session.get(current, allow_redirects=False) as response:
+                async with session.get(current, allow_redirects=False, headers={"User-Agent":"Galingtosh/1.0 (licensed audiovisual media; https://galingtosh.online)"}) as response:
                     if response.status in REDIRECT_CODES:
                         location = response.headers.get("Location")
                         if not location or hop == 3:

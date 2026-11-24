@@ -16,9 +16,9 @@ from app.core.variant_trials import render_trial
 from app.media.ffmpeg import run_ffmpeg,probe_media
 from app.media.resolver import download_public_media
 
-PHOTO_PAGE="https://commons.wikimedia.org/wiki/File:The_Blue_Marble,_AS17-148-22727.jpg"
-PHOTO_URL="https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/The_Blue_Marble%2C_AS17-148-22727.jpg/960px-The_Blue_Marble%2C_AS17-148-22727.jpg"
-ORIGINAL_URL="https://upload.wikimedia.org/wikipedia/commons/7/70/The_Blue_Marble%2C_AS17-148-22727.jpg"
+PHOTO_PAGE="https://eol.jsc.nasa.gov/Collections/EarthFromSpace/images.pl?photo=AS17-148-22727"
+PHOTO_URL="https://eol.jsc.nasa.gov/DatabaseImages/EFS/lowres/AS17/AS17-148-22727.JPG"
+ORIGINAL_URL="https://eol.jsc.nasa.gov/DatabaseImages/scanned/highres/AS17/AS17-148-22727.JPG"
 
 async def main(root:Path):
     root.mkdir(parents=True,exist_ok=True)
@@ -57,7 +57,7 @@ async def main(root:Path):
             {"id":"photo","order":1,"inSec":0,"outSec":6,"visualMode":"programmatic","visualText":quotes[0],"cardStyle":"focus"},
             {"id":"rotation","order":2,"inSec":6,"outSec":12,"visualMode":"programmatic","visualText":quotes[1],"visualSpec":{"type":"sphere_rotation","items":[{"text":quotes[1]}]}}
           ]}],
-       "media":[{"id":"nasa_photo","kind":"image","source":"search","provenance":{"author":"Harrison Schmitt / Apollo 17 / NASA","source":"Wikimedia Commons","url":PHOTO_PAGE,"license":"Public domain in the United States (NASA)","attribution":"Apollo 17 / NASA, AS17-148-22727"}}],
+       "media":[{"id":"nasa_photo","kind":"image","source":"search","provenance":{"author":"Harrison Schmitt / Apollo 17 / NASA","source":"NASA Johnson Space Center","url":PHOTO_PAGE,"license":"Public domain in the United States (NASA)","attribution":"Apollo 17 / NASA, AS17-148-22727"}}],
        "audio":{"tracks":[{"id":ref,"kind":"voiceover","mediaRef":ref,"events":[{"startSec":0,"durationSec":duration}]}],
          "editorialAccents":False,"proceduralMusic":{"enabled":True,"volumeDb":-18,"cues":[{"sceneId":sid,"mood":"wonder","intensity":.45}]}},
        "subtitles":[{"language":"fr","cues":[{"startSec":i*6+.1,"endSec":i*6+5.8,"text":q} for i,q in enumerate(quotes)]}],
