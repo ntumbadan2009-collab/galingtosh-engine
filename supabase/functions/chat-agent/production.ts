@@ -206,6 +206,7 @@ export async function productionTick(admin:any,serviceToken:string,system:string
    return {status:"advanced"};
   }
   if(director.status!=="passed")issue="Le réalisateur indépendant demande des corrections du plan : "+JSON.stringify(director.feedback).slice(0,3500);
+  else ctx.directorReviewKey=reviewKey;
  }
  const step=await rpc(admin,"begin_production_step",{...lease,p_kind:c.name});
  const call={...c,id:crypto.randomUUID()};
