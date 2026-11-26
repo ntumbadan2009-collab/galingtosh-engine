@@ -56,3 +56,19 @@ Deno.test("exact uncovered beat fallback preserves previous verified shot",()=>{
  assert(patched.scenes[0].shots.length===2&&patched.scenes[0].shots[0].id==="a","existing media preserved");
  assert(missingIntervals(patched.scenes[0]).length===0,"coverage complete");
 });
+
+Deno.test("focus fills missing items without relaxing other diagram rules",()=>{
+ const f=defaultFilm("Test","custom");
+ const quote="Un mouvement décrit dans le récit.";
+ f.scenes=[{id:"s",order:1,title:"Test",durationSec:5,narration:{text:quote},shots:[]}];
+ const args={scene_id:"s",inSec:0,outSec:5,visualText:quote,visualType:"focus"};
+ assert(repairFocus(f,"add_code_shot",args).args.visualItems[0]===quote,"missing focus item restored");
+ assert(!repairFocus(f,"add_code_shot",{...args,visualType:"sphere_rotation"}).repair,"no invented 3D shape");
+ assert(!repairFocus(f,"add_code_shot",{...args,visualType:"timeline"}).repair,"no invented timeline");
+});
+Deno.test("unverified documentary still requires factual review",()=>{
+ const f=defaultFilm("Test","documentary");
+ f.scenes=[{id:"s",order:1,title:"Test",durationSec:5,narration:{text:"La Terre tourne autour de son axe."},shots:[]}];
+ const g=productionGuidance(f,null,null,true)!;
+ assert(g.kind==="research"&&g.sceneId==="s"&&!g.fallback,"cannot bypass facts for fallback");
+});
