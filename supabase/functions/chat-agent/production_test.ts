@@ -16,7 +16,7 @@ Deno.test("preflight refuses blank scenes and missing media",()=>{
    "A code illustration quoting the approved narration is a complete plan");
 });
 
-import {missingIntervals,productionGuidance,repairFocus} from "./reliability.ts";
+import {missingIntervals,productionGuidance,repairFocus,redundantAttachment} from "./reliability.ts";
 import {defaultFilm,applyOperation} from "./film.ts";
 Deno.test("focus correction preserves literal quote and strict validation",()=>{
  const f=defaultFilm("Test","custom");
@@ -71,4 +71,15 @@ Deno.test("unverified documentary still requires factual review",()=>{
  f.scenes=[{id:"s",order:1,title:"Test",durationSec:5,narration:{text:"La Terre tourne autour de son axe."},shots:[]}];
  const g=productionGuidance(f,null,null,true)!;
  assert(g.kind==="research"&&g.sceneId==="s"&&!g.fallback,"cannot bypass facts for fallback");
+});
+
+Deno.test("duplicate attachment must not erase existing evidence in autonomy",()=>{
+ const f=defaultFilm("Test","custom");
+ f.media=[{id:"m",kind:"image",provenance:{result_id:"wikimedia:123"}}];
+ f.scenes=[{id:"s",shots:[{id:"a",mediaRef:"m",visualMode:"media",visualEvidence:{verifiedBy:"vision_observation_v1"}},{id:"b",visualMode:"programmatic"}]}];
+ assert(redundantAttachment(f,"add_found_media",{shot_id:"a",result_id:"wikimedia:123"}),"same asset and shot");
+ assert(redundantAttachment(f,"attach_media",{shot_id:"a",media_asset_id:"m"}),"same attachment");
+ assert(!redundantAttachment(f,"add_found_media",{shot_id:"a",result_id:"wikimedia:456"}),"different asset remains allowed");
+ assert(!redundantAttachment(f,"add_found_media",{shot_id:"b",result_id:"wikimedia:123"}),"different shot remains allowed");
+ assert(!redundantAttachment(f,"verify_shot_media",{shot_id:"a"}),"verification remains allowed");
 });

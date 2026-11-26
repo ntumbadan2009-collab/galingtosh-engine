@@ -79,3 +79,15 @@ export function repairFocus(film:Json,name:string,args:Json):{args:Json;repair?:
  try{applyOperation(film,name,corrected);}catch{return {args};}
  return {args:corrected,repair:"focus : citation exacte regroupée en un seul élément"};
 }
+
+// Re-attaching an identical asset to the same plan would erase its
+// previously recorded visual evidence. This is never useful in autonomous
+// mode; deliberate manual replacement and other shots remain unaffected.
+export function redundantAttachment(film:Json,name:string,args:Json):boolean{
+ if(!["add_found_media","attach_media"].includes(name)||typeof args.shot_id!=="string")return false;
+ const shot=arr(film.scenes).flatMap(s=>arr(s.shots)).find(sh=>sh.id===args.shot_id);
+ if(!shot||shot.visualMode!=="media"||!shot.mediaRef)return false;
+ if(name==="attach_media")return typeof args.media_asset_id==="string"&&args.media_asset_id===shot.mediaRef;
+ const asset=arr(film.media).find(m=>m.id===shot.mediaRef);
+ return typeof args.result_id==="string"&&!!args.result_id&&asset?.provenance?.result_id===args.result_id;
+}

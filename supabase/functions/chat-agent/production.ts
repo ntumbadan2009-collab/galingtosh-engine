@@ -14,7 +14,7 @@ import { EDITORIAL_DIRECTION, editorialTimelineIssues } from "./editorial.ts";
 import { reviewNext } from "./cinematic.ts";
 import { attemptCinematicRepair } from "./cinematic_repair.ts";
 import { CREATIVE_ROLES, nextRole, creativeCall } from "./creative.ts";
-import { productionGuidance, repairFocus } from "./reliability.ts";
+import { productionGuidance, repairFocus, redundantAttachment } from "./reliability.ts";
 
 // Only the trusted server-side worker may claim missions. No end-user JWT is
 // persisted. Each tick performs at most one externally observable tool call.
@@ -277,8 +277,16 @@ export async function productionTick(admin:any,serviceToken:string,system:string
   const fallbackKey=await directorKey({name:"add_code_shot",args:guidance.fallback},film.version,film.rev);
   if((recent??[]).some((row:any)=>row.status==="failed"&&row.result?.actionKey===fallbackKey))return false;
   const step=await rpc(admin,"begin_production_step",{...lease,p_kind:"add_code_shot"});
-  const out=await execTool(ctx,"add_code_shot",guidance.fallback);
-  await rpc(admin,"finish_production_step",{...lease,p_step:step,p_ok:!out.isError,p_result:{...out.output,recovery:"citation exacte sur un intervalle visuel manquant",sceneId:guidance.sceneId,actionKey:fallbackKey},p_render:null});
+  let result:Json,ok=false;
+  try{
+   const patch=applyOperation(film.data,"add_code_shot",guidance.fallback);
+   // The gap was computed from this exact snapshot. A concurrent edit
+   // invalidates the recovery plan; never retry against a changed film.
+   const {data:saved,error}=await admin.rpc("save_film_operation",{p_user_id:m.user_id,p_film_id:film.id,p_rev:film.rev,p_data:patch.film,p_op:{name:"add_code_shot",args:guidance.fallback}});
+   if(error||!saved)throw Error("Le film a changé pendant la reprise; réexaminer le minutage.");
+   result={...patch.result,film_version:film.version};ok=true;
+  }catch(e){result={error:e instanceof Error?e.message:String(e)};}
+  await rpc(admin,"finish_production_step",{...lease,p_step:step,p_ok:ok,p_result:{...result,recovery:"citation exacte sur un intervalle visuel manquant",sceneId:guidance.sceneId,actionKey:fallbackKey},p_render:null});
   return true;
  };
  if(recovering&&m.retry_count>=2&&await runFallback())return {status:"advanced"};
@@ -294,6 +302,10 @@ export async function productionTick(admin:any,serviceToken:string,system:string
  }
  const selected=choice.toolCalls.find(t=>tools.some(x=>x.name===t.name));
  if(!selected){
+  if(recovering&&await runFallback())return {status:"advanced"};
+  await release(m.retry_count>=3?"needs_review":"queued","no_action_selected",30);return {status:"retry"};
+ }
+ if(redundantAttachment(film.data,selected.name,selected.args??{})){
   if(recovering&&await runFallback())return {status:"advanced"};
   await release(m.retry_count>=3?"needs_review":"queued","no_action_selected",30);return {status:"retry"};
  }
