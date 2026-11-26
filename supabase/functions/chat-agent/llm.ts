@@ -158,10 +158,11 @@ async function openaiChat(cfg: LlmCfg, payload: Json): Promise<any> {
   const now = Date.now();
   const ready = (m: string) => (cooldown.get(m) ?? 0) <= now;
   let attempts = [...cyclic.filter(ready), ...reserve.filter(ready)];
-  if (!attempts.length) attempts = [...cyclic, ...reserve]; // tous écartés : on retente tout, sans attendre
+  if (!attempts.length) throw new Error("provider_cooldown: all Gemini models temporarily unavailable");
 
   const started = Date.now();
   const errors: string[] = [];
+  let rateLimited=0,temporary=0;
   for (const model of attempts) {
     const left = Math.min(ROTATION_BUDGET_MS - (Date.now() - started),(cfg.deadlineAt ?? Infinity)-Date.now());
     if (left < 5_000) { errors.push("délai de rotation dépassé"); break; }
@@ -181,6 +182,8 @@ async function openaiChat(cfg: LlmCfg, payload: Json): Promise<any> {
       cfg.model = model; // journalisation d'usage : modèle réellement utilisé
       return j;
     } catch (e) {
+      if(e instanceof HttpError&&e.status===429)rateLimited++;
+      else if((e instanceof HttpError&&e.status>=500)||/timeout|timed out|abort/i.test(String(e)))temporary++;
       const cd = cooldownFor(e);
       if (cd) cooldown.set(model, Date.now() + cd);
       const msg = e instanceof Error ? e.message : String(e);
@@ -188,7 +191,7 @@ async function openaiChat(cfg: LlmCfg, payload: Json): Promise<any> {
       errors.push(`${model} : ${msg.replace(/^Fournisseur IA : /, "").slice(0, 140)}`);
     }
   }
-  throw new Error(`Tous les modèles Gemini ont échoué (${errors.length}). ${errors.join(" | ")}`.slice(0, 1200));
+  throw new Error(`${rateLimited?"provider_rate_limited: ":temporary?"provider_temporarily_unavailable: ":""}Tous les modèles Gemini ont échoué (${errors.length}). ${errors.join(" | ")}`.slice(0, 1200));
 }
 
 // Retire les blocs de réflexion éventuellement renvoyés dans le contenu (modèles de réflexion).

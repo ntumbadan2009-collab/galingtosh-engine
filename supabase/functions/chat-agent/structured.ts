@@ -94,13 +94,23 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
  const history:Ledger[]=data??[];
  const entries=(kind:string,key:string)=>history.filter(h=>h.kind===kind&&h.result?.key===key);
  const done=(kind:string,key:string)=>entries(kind,key).find(h=>h.status==="done");
- const count=(kind:string,key:string)=>entries(kind,key).length;
+ const count=(kind:string,key:string)=>entries(kind,key).filter(h=>!h.result?.transientProvider).length;
+ const providerFailures=history.filter(h=>h.result?.transientProvider);
+ const lastProvider=providerFailures.at(-1);
+ if(lastProvider&&lastProvider.step_no===history.at(-1)?.step_no){
+  const remaining=Math.ceil((Number(lastProvider.result.retryAt)-Date.now())/1000);
+  if(remaining>0){await release("queued","provider_backoff",Math.min(900,remaining));return {status:"queued",phase:"provider_backoff"};}
+  const consecutive=history.slice().reverse().findIndex(h=>!h.result?.transientProvider);
+  const n=consecutive<0?history.length:consecutive;
+  if(n>=6){await release("needs_review","provider_retry_exhausted");return {status:"needs_review",reason:"provider_retry_exhausted"};}
+ }
  const block=async(code:string)=>{await release("needs_review",code);return {status:"needs_review",reason:code};};
  const step=async(kind:string,key:string,fn:()=>Promise<any>,extra:any={})=>{
   const {data:n,error:e}=await admin.rpc("begin_production_step",{...lease,p_kind:kind});if(e)throw Error(e.message);
   let result:any,ok=true;
   try{ctx.cfg.deadlineAt=Date.now()+75000;result=await fn();if(result?.ok===false)ok=false;}
   catch(e){ok=false;result={error:e instanceof Error?e.message.slice(0,700):String(e).slice(0,700)};}
+  if(!ok&&/provider_(?:rate_limited|cooldown|temporarily_unavailable)|HTTP 429/i.test(String(result?.error??""))){const n=entries(kind,key).filter(h=>h.result?.transientProvider).length;result={...result,transientProvider:true,retryAt:Date.now()+Math.min(900,60*Math.pow(2,n))*1000};}
   const {error:finish}=await admin.rpc("finish_production_step",{...lease,p_step:n,p_ok:ok,p_result:{...result,...extra,key},p_render:null});if(finish)throw Error(finish.message);
   return {status:"advanced",phase:kind,ok};
  };
@@ -168,7 +178,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
   if(!q){
    if(count("structured_research_query",qkey)>=2)return block("research_query_failed");
    return step("structured_research_query",qkey,async()=>{
-    const raw=await call("submit_queries",{query:S,englishQuery:S,alternateQuery:S},"Prépare trois requêtes documentaires courtes et ciblées sur les affirmations. La première dans la langue du récit, les deux autres en anglais, avec nom scientifique et termes d'articles scientifiques si utiles. Les deux requêtes anglaises doivent viser des travaux différents. Réponds uniquement avec les requêtes.",{scene:scene.title,narration:scene.narration.text,goal:m.goal,previous:entries("structured_research",key).map(x=>x.result.error)});
+    const raw=await call("submit_queries",{query:S,englishQuery:S,alternateQuery:S},"Prépare trois requêtes documentaires courtes et ciblées sur les affirmations. La première dans la langue du récit, les deux autres en anglais, avec nom scientifique et termes d'articles scientifiques si utiles. Les deux requêtes anglaises doivent viser des travaux différents. Commence par une recherche large du sujet et de son mécanisme (2 à 5 mots), sans présupposer un chiffre exact; l’autre requête peut être plus précise. Réponds uniquement avec les requêtes.",{scene:scene.title,narration:scene.narration.text,goal:m.goal,previous:entries("structured_research",key).map(x=>x.result.error)});
     for(const k of ["query","englishQuery","alternateQuery"])if(typeof raw[k]!=="string"||!raw[k].trim()||raw[k].length>180)throw Error("invalid_research_query");
     return raw;
    });
