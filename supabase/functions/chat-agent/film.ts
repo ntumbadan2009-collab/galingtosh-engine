@@ -246,6 +246,12 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const pitchHz=numIn(a.pitchHz??scene.narration?.pitchHz??0,"pitchHz",-12,12);
       if(!Number.isInteger(ratePercent)||!Number.isInteger(pitchHz))fail("Direction vocale : valeurs entières requises.");
       if(scene.narration?.text!==text)delete scene.researchEvidence;
+      const oldVoice=scene.narration;
+      if(oldVoice?.text===text && Number(oldVoice.ratePercent??0)===ratePercent && Number(oldVoice.pitchHz??0)===pitchHz &&
+         (a.language??f.info.language??"fr")===oldVoice.language && (a.voice??"default")===oldVoice.voice &&
+         Math.abs(targetDurationSec-oldDuration)<.001){
+        result={scene_id:scene.id,targetDurationSec,unchanged:true}; break;
+      }
       scene.narration = {
         text,ratePercent,pitchHz,
         targetDurationSec,
@@ -277,6 +283,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         }
         scene.durationSec = measured;
         scene.narration.measuredDurationSec = measured;
+        if(a.acceptMeasuredTargets===true)scene.narration.targetDurationSec=measured;
         if (item.ttsProvider === "edge-tts" || item.ttsProvider === "piper") scene.narration.ttsProvider = item.ttsProvider;
         aligned++;
       }
@@ -419,8 +426,10 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
     case "update_shot": {
       const { scene, shot } = findShot(f, req(a, "shot_id"));
       if (a.camera !== undefined) shot.camera = camera(a.camera, warnings);
-      if (a.mediaRef !== undefined || a.inSec !== undefined ||
-          a.outSec !== undefined || a.sourceInSec !== undefined) delete shot.visualEvidence;
+      if ((a.mediaRef !== undefined && a.mediaRef !== shot.mediaRef) ||
+          (a.inSec !== undefined && Number(a.inSec)!==Number(shot.inSec)) ||
+          (a.outSec !== undefined && Number(a.outSec)!==Number(shot.outSec)) ||
+          (a.sourceInSec !== undefined && Number(a.sourceInSec)!==Number(shot.sourceInSec??0))) delete shot.visualEvidence;
       if (a.inSec !== undefined) shot.inSec = numIn(a.inSec, "inSec", 0, 3600);
       if (a.outSec !== undefined) shot.outSec = numIn(a.outSec, "outSec", 0.1, 3600);
       if (a.sourceInSec !== undefined) shot.sourceInSec = numIn(a.sourceInSec, "sourceInSec", 0, 36000);
@@ -436,6 +445,8 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const { scene, shot } = findShot(f, req(a, "shot_id"));
       scene.shots = scene.shots.filter((x: Json) => x.id !== shot.id);
       f.transitions = f.transitions.filter((t: Json) => t.atShotId !== shot.id);
+      f.effects=f.effects.filter((e:Json)=>e.target!==shot.id);
+      f.audio.tracks=f.audio.tracks.filter((t:Json)=>t.soundEvidence?.shotId!==shot.id);
       renum(scene.shots);
       break;
     }

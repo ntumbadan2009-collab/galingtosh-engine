@@ -145,23 +145,27 @@ export function planNarrativeBeats(text: string, durationSeconds: number): Narra
     throw new Error("Texte narratif et durée valides requis.");
   const tokens = [...text.matchAll(/\S+/gu)].map(m => ({word: m[0], from: m.index!, to: m.index!+m[0].length}));
   if (!tokens.length) throw new Error("Narration vide.");
-  const desiredCount = Math.max(1, Math.ceil(durationSeconds/6));
-  const maxWords = Math.min(18, Math.max(5, Math.ceil(tokens.length/desiredCount)));
-  const quotes: {from: number; to: number; words: number}[] = [];
-  for (let start=0; start<tokens.length;) {
-    let end = Math.min(tokens.length, start+maxWords);
-    // Prefer a natural punctuation boundary near the intended cut.
-    const earliest = Math.max(start+4, end-4);
-    for (let idx=end-1; idx>=earliest; idx--) {
-      if (/[.!?;:,]$/.test(tokens[idx].word)) { end=idx+1; break; }
-    }
-    quotes.push({from:tokens[start].from, to:tokens[end-1].to, words:end-start});
-    start=end;
+  // A balanced estimated timeline prevents the planner from prescribing
+  // six-second shots that the strict foundations subsequently reject.
+  // Never fabricate empty quotes when the narration is unusually sparse.
+  const desiredCount=Math.min(tokens.length,Math.max(1,Math.ceil(durationSeconds/5)));
+  const quotes:{from:number;to:number;words:number}[]=[];
+  let startWord=0;
+  for(let part=0;part<desiredCount;part++){
+    const remaining=desiredCount-part;
+    const ideal=Math.min(tokens.length-(remaining-1),startWord+Math.max(1,Math.round((tokens.length-startWord)/remaining)));
+    let endWord=ideal;
+    if(remaining>1){
+      const low=Math.max(startWord+1,ideal-2),high=Math.min(tokens.length-(remaining-1),ideal+2);
+      let distance=Infinity;
+      for(let k=low;k<=high;k++)if(/[.!?;:,]$/.test(tokens[k-1].word)&&Math.abs(k-ideal)<distance){endWord=k;distance=Math.abs(k-ideal);}
+    }else endWord=tokens.length;
+    quotes.push({from:tokens[startWord].from,to:tokens[endWord-1].to,words:endWord-startWord});
+    startWord=endWord;
   }
-  const sumWords = quotes.reduce((a,b)=>a+b.words,0);
   let cursor=0;
   return quotes.map((item,i)=>{
-    const ending = i===quotes.length-1?durationSeconds:durationSeconds*quotes.slice(0,i+1).reduce((a,b)=>a+b.words,0)/sumWords;
+    const ending=i===quotes.length-1?durationSeconds:durationSeconds*(i+1)/quotes.length;
     const quote=text.slice(item.from,item.to).trim();
     const style: NarrativeBeat["presentation"] = quote.includes("?") ? "question"
       : /\b(mais|cependant|pourtant|contrairement|however|but)\b/i.test(quote) ? "contrast" : "focus";

@@ -167,6 +167,15 @@ async function openaiChat(cfg: LlmCfg, payload: Json): Promise<any> {
     if (left < 5_000) { errors.push("délai de rotation dépassé"); break; }
     try {
       const j = await openaiChatOnce(cfg, model, payload, Math.min(ATTEMPT_TIMEOUT_MS, left));
+      // A successful HTTP response is not enough when an autonomous action is required.
+      if(payload.tool_choice==="required"){
+        const calls=j.choices?.[0]?.message?.tool_calls??j.choices?.[0]?.message?.toolCalls??[];
+        const valid=Array.isArray(calls)&&calls.some((c:any)=>{
+          if(!payload.tools?.some((t:any)=>t.function?.name===c.function?.name))return false;
+          try{const a=typeof c.function.arguments==="string"?JSON.parse(c.function.arguments):c.function.arguments;return !!a&&typeof a==="object"&&!Array.isArray(a);}catch{return false;}
+        });
+        if(!valid)throw Error("Gemini: aucune action valide sélectionnée");
+      }
       const pi = pool.indexOf(model);
       if (pi >= 0) cursor = (pi + 1) % n; // la prochaine requête démarre au modèle suivant du groupe principal
       cfg.model = model; // journalisation d'usage : modèle réellement utilisé
@@ -187,7 +196,7 @@ const cleanText = (t: string | null | undefined) =>
   (t ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
 export async function complete(
-  cfg: LlmCfg, system: string, messages: NMsg[], tools: ToolDef[], maxTokens = 8192,
+  cfg: LlmCfg, system: string, messages: NMsg[], tools: ToolDef[], maxTokens = 8192, requireAction = false,
 ): Promise<LlmResult> {
   if (cfg.provider === "anthropic") {
     const msgs: any[] = [];
@@ -242,12 +251,13 @@ export async function complete(
   }
   const j = await openaiChat(cfg, {
     max_tokens: maxTokens, messages: msgs,
+    ...(requireAction&&tools.length?{tool_choice:"required"}:{}),
     tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })),
   });
   const msg = j.choices?.[0]?.message ?? {};
   return {
     text: cleanText(msg.content),
-    toolCalls: (msg.tool_calls ?? []).map((tc: any) => {
+    toolCalls: (msg.tool_calls ?? msg.toolCalls ?? []).map((tc: any) => {
       let args: Json = {};
       const raw = tc.function?.arguments;
       if (raw && typeof raw === "object") args = raw;

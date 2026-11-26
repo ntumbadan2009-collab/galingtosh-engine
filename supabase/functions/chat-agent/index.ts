@@ -3,9 +3,11 @@ import { corsHeaders, json } from "./cors.ts";
 import { complete, llmConfig, type NMsg } from "./llm.ts";
 import { execTool, TOOLS, type Ctx } from "./tools.ts";
 import { summarizeFilm, applyOperation } from "./film.ts";
+import {FOUNDATION_POLICY} from "./foundations.ts";
+import {DIRECTOR_POLICY} from "./director_intelligence.ts";
 import {verifyPrecisionRevision} from "./precision_revision.ts";
 import {PROPOSAL_TOOL,proposeMission,approveMission,productionTick} from "./production.ts";
-import {interpretPlanReply} from "./proposal-intents.ts";
+import {interpretPlanReply,directProduction} from "./proposal-intents.ts";
 
 // Wake the render service once in response to a real queued workload.
 // This is dispatch, not a periodic keep-alive. A failed wake leaves the mission intact.
@@ -317,6 +319,22 @@ async function handle(req: Request): Promise<Response> {
   await admin.from("usage_events").insert({ user_id: userId, kind: "agent_request", units: 1 });
   await saveMsg(admin, conversationId!, userId, "user", message, attachments.length ? { attachments } : {});
 
+  // Explicit complete-video requests go directly to the durable worker.
+  const directSeconds=directProduction(message);
+  if(directSeconds!==null && !pendingDraft){
+    const directCtx:Ctx={admin,userId,authToken:token,conversationId:conversationId!,projectId,cfg,usage:{input:0,output:0}};
+    if(!directCtx.projectId){
+      const created=await execTool(directCtx,"create_project",{title:message.split(/[.!?\n]/)[0].slice(0,100),type:/\b(documentaire|documentary)\b/i.test(message)?"documentary":/\b(reportage)\b/i.test(message)?"reportage":/\b(éducati[fv]|educational)\b/i.test(message)?"educational":"custom",language:"fr",synopsis:message.slice(0,4000)});
+      if(created.isError||!directCtx.projectId)return json({error:"Le projet n’a pas pu être créé."},503);
+    }
+    const p=await proposeMission(directCtx,message,{target_seconds:directSeconds,plan:message+"\nProduction intégrale autonome; conserver les contraintes de la demande. Plans visuels de 3 à 5 secondes sauf exception justifiée; narration, médias pertinents, contrôles et rendu final obligatoires."});
+    await approveMission(admin,userId,conversationId!,p.id);
+    dispatchProduction();
+    const reply="Production lancée. Je réalise les étapes automatiquement jusqu’au rendu, avec les contrôles de qualité. Tu peux suivre l’avancement dans le Studio.";
+    await saveMsg(admin,conversationId!,userId,"assistant",reply,{production_mission_id:p.id});
+    return json({reply,conversation_id:conversationId,project_id:directCtx.projectId,production_mission_id:p.id,tool_events:[]});
+  }
+
   // Les salutations isolées ne sont pas des demandes de création et ne nécessitent aucun appel de modèle.
   // Cela évite qu'un modèle transforme « Salut » en accueil générique ou prétende traiter un projet.
   const isGreeting = attachments.length === 0 && /^(?:salut|bonjour|bonsoir|coucou|hello|hi|hey|yo)(?:[!,\.\s]+(?:ça va|comment (?:vas-tu|allez-vous)))?[!?.\s]*$/iu.test(message);
@@ -349,7 +367,7 @@ async function handle(req: Request): Promise<Response> {
   const draftContext=pendingDraft
     ? `\nPROPOSITION CRÉATIVE EN ATTENTE (NON APPROUVÉE). Objectif original : ${pendingDraft.goal}. Durée cible actuelle : ${pendingDraft.target_seconds} secondes. Proposition actuelle :\n${pendingDraft.plan}\nL'utilisateur peut donner des modifications libres dans le chat. S'il demande un ajustement, appelle UNIQUEMENT propose_production en conservant l'objectif original et les autres éléments non concernés. Ne touche PAS au Film JSON ou aux médias avant validation. Si l'utilisateur pose une question, réponds normalement sans modifier le plan. La réponse courte OK est traitée séparément et n'arrive pas au modèle.`
     : "";
-  const system = `${SYSTEM}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une modification locale d’un schéma animé existant, propose preview_precision_revision. Cette prévisualisation n’enregistre rien : ne prétends jamais que la révision a été appliquée. Les autres modifications locales conservent le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
+  const system = `${SYSTEM}\n\n${FOUNDATION_POLICY}\n\n${DIRECTOR_POLICY}\n\n${state}\nPRODUCTION LONGUE OU COMPLÈTE : si l'utilisateur demande une nouvelle vidéo, un documentaire, un film ou une production complète, propose d'abord une direction créative et une durée. Ne demande que les précisions essentielles, groupées. Crée au besoin uniquement le projet vide, puis utilise propose_production pour enregistrer le plan complet. N'ajoute aucune scène, média ou narration avant son approbation explicite. Pour une modification locale d’un schéma animé existant, propose preview_precision_revision. Cette prévisualisation n’enregistre rien : ne prétends jamais que la révision a été appliquée. Les autres modifications locales conservent le comportement normal. La capacité actuelle reste limitée à 600 secondes et 45 Mo ; n'annonce pas une capacité supérieure.${draftContext}`;
   const availableTools=pendingDraft?[PROPOSAL_TOOL]:[...TOOLS,PROPOSAL_TOOL];
 
   const ctx: Ctx = { admin, userId, authToken: token, conversationId: conversationId!, projectId, cfg, usage: { input: 0, output: 0 } };
