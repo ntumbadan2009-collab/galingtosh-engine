@@ -82,6 +82,7 @@ export function repairSceneLayout(src:Json,sceneId:string){
  changes.push({name:"order_repaired_shots",args:{scene_id:sceneId,shot_ids:sequence}});
  return {film,changes};
 }
+export function definitiveMediaChecks<T extends {result?:any}>(rows:T[]):T[]{return rows.filter(x=>!x.result?.transientProvider);}
 export function chooseCandidate(results:any[],used:Set<string>,kind:string,seconds:number){
  return arr(results).find(x=>typeof x.result_id==="string"&&!used.has(x.result_id)&&x.license&&x.author&&x.url&&!/unknown|inconnue|non renseignée/i.test(String(x.license))&&(kind!=="video"||x.duration==null||Number(x.duration)>=seconds));
 }
@@ -259,7 +260,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
    const slotKey=layoutKey+":"+sh.id;
    if(done("structured_media_fallback",slotKey))continue;
    const attempts=entries("structured_media_attach",slotKey);
-   const verified=entries("structured_media_verify",slotKey);
+   const verified=definitiveMediaChecks(entries("structured_media_verify",slotKey));
    const last=attempts.at(-1);
    if(last?.status==="done"&&sh.mediaRef===last.result.media_asset_id&&!verified.some(x=>x.result.candidateId===last.result.candidateId)){
     return step("structured_media_verify",slotKey,()=>runTool("verify_shot_media",{shot_id:sh.id,narrationQuote:target.quote,visualIntent:target.intent}),{candidateId:last.result.candidateId});

@@ -1,5 +1,5 @@
 import {indexEvidence,materializeEvidence,researchIssues} from "./research.ts";
-import {repairSceneLayout,sceneVisualReady,chooseCandidate} from "./structured.ts";
+import {repairSceneLayout,sceneVisualReady,chooseCandidate,definitiveMediaChecks} from "./structured.ts";
 import {applyOperation,defaultFilm} from "./film.ts";
 const assert=(v:unknown)=>{if(!v)throw Error("assertion failed");};
 const reject=(fn:()=>unknown)=>{let failed=false;try{fn()}catch{failed=true}assert(failed);};
@@ -24,3 +24,5 @@ Deno.test("layout fixes overlaps and covers complete scene without restarting va
 Deno.test("candidate selection cannot repeat rejected media",()=>{
  const x={result_id:"x",author:"A",license:"CC BY",url:"https://example.org/x",duration:10},y={...x,result_id:"y"};assert(chooseCandidate([x,y],new Set(["x"]),"video",4)?.result_id==="y");assert(!chooseCandidate([x],new Set(["x"]),"video",4));
 });
+
+Deno.test("provider outage is not a visual rejection",()=>{const rows=[{result:{candidateId:"a",transientProvider:true}},{result:{candidateId:"b",verified:false}}];const definitive=definitiveMediaChecks(rows);assert(definitive.length===1&&definitive[0].result.candidateId==="b");});
