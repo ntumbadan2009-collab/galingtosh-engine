@@ -14,4 +14,4 @@ jobs:
         with:
           deno-version: v2.x
       - run: deno check supabase/functions/chat-agent/index.ts
-      - run: deno test --allow-env supabase/functions/chat-agent/production_test.ts supabase/functions/chat-agent/proposal-intents.test.ts
+      - run: deno test --allow-env supabase/functions/chat-agent/production_test.ts supabase/functions/chat-agent/proposal-intents.test.ts supabase/functions/chat-agent/montage.test.ts
