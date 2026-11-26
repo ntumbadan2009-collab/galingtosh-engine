@@ -283,6 +283,7 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
         }
         scene.durationSec = measured;
         scene.narration.measuredDurationSec = measured;
+        if(a.acceptMeasuredTargets===true)scene.narration.targetDurationSec=measured;
         if (item.ttsProvider === "edge-tts" || item.ttsProvider === "piper") scene.narration.ttsProvider = item.ttsProvider;
         aligned++;
       }
@@ -444,6 +445,8 @@ export function applyOperation(src: Json, name: string, a: Json): { film: Json; 
       const { scene, shot } = findShot(f, req(a, "shot_id"));
       scene.shots = scene.shots.filter((x: Json) => x.id !== shot.id);
       f.transitions = f.transitions.filter((t: Json) => t.atShotId !== shot.id);
+      f.effects=f.effects.filter((e:Json)=>e.target!==shot.id);
+      f.audio.tracks=f.audio.tracks.filter((t:Json)=>t.soundEvidence?.shotId!==shot.id);
       renum(scene.shots);
       break;
     }
