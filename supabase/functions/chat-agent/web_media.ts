@@ -88,8 +88,10 @@ export function smithsonianCandidates(raw:any,limit:number){
 }
 export async function smithsonianSearch(query:string,key:string,limit:number){
  const u=new URL("https://api.si.edu/openaccess/api/v1.0/search");
- u.searchParams.set("api_key",key);u.searchParams.set("q",query);u.searchParams.set("rows",String(Math.min(20,limit)));
- return smithsonianCandidates(await json(u),limit);
+ u.searchParams.set("api_key",key);u.searchParams.set("q",query+" AND media_usage:CC0 AND (online_media_type:Images OR online_media_type:3d_voyager)");u.searchParams.set("rows",String(Math.max(1,Math.min(40,limit*2))));
+ const raw=await json(u);
+ if(raw?.status!==undefined && raw.status!==200 && raw.status!=="200" && raw.status!=="success")throw Error("Smithsonian response status");
+ return smithsonianCandidates(raw,limit);
 }
 export const extendedSource=(source:unknown)=>source==="artic"||source==="archive"||source==="smithsonian";
 export const extendedEnabled=()=>Deno.env.get("SECURE_WEB_MEDIA_ENABLED")==="true";
