@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json
+import asyncio
 from pathlib import Path
 from typing import Any
 from app.media.resolver import download_public_media
+from app.media.secure_web import is_extended,download_extended,clean_image,digest
 from app.media.audio_evidence import licensed_public_sound, MAX_SOUND_BYTES
 from app.media.graphics import chart_to_png, chart_to_video, sanitize_svg_to_png
 from app.storage.supabase import SupabaseREST, SupabaseError
@@ -62,7 +64,20 @@ async def resolve_film_media(film:dict[str,Any],project_id:str,user_id:str,db:Su
     provenance=row.get("provenance") or {}
     url=provenance.get("download_url") or provenance.get("preview_url")
     if not url: warnings.append(f"Média recherché {mid} sans URL."); continue
-    _,mime=await download_public_media(str(url),target,MAX_SOUND_BYTES if checked_sound else MAX_MEDIA_BYTES)
+    if is_extended(row):
+     uses=[shot for scene in film.get("scenes",[]) for shot in scene.get("shots",[]) if shot.get("mediaRef")==mid]
+     if not uses: continue
+     _,mime=await download_extended(row,target)
+     sha=await asyncio.to_thread(digest,target)
+     if any((shot.get("visualEvidence") or {}).get("assetSha256")!=sha or (shot.get("visualEvidence") or {}).get("contentSafetyChecked") is not True for shot in uses):
+      raise SupabaseError("Le fichier Web a changé ou ne dispose pas de preuve de sécurité.")
+     if kind=="image":
+      final=target.with_suffix(".jpg")
+      await asyncio.to_thread(clean_image,target,final)
+      target.unlink(missing_ok=True)
+      files[mid]=final;credits.append(_credit(row));continue
+    else:
+     _,mime=await download_public_media(str(url),target,MAX_SOUND_BYTES if checked_sound else MAX_MEDIA_BYTES)
    else:
     warnings.append(f"Source « {source} » du média {mid} non prise en charge."); continue
    if mime not in ALLOWED_MIME[kind]: raise SupabaseError("Type MIME incompatible.")

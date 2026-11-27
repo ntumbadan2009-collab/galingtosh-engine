@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import os
 from pathlib import Path
 
 
@@ -16,11 +17,23 @@ def require_binary(name: str) -> str:
     return binary
 
 
+def decoder_env() -> dict[str,str]:
+    # Do not pass Supabase/API credentials to media decoders.
+    return {"PATH":os.defpath + ":/usr/local/bin","LANG":"C.UTF-8","HOME":"/tmp"}
+
+def local_inputs(args: list[str]) -> list[str]:
+    out=[]
+    for value in args:
+        if value == "-i":
+            out += ["-protocol_whitelist","file,pipe"]
+        out.append(value)
+    return out
+
 async def run_ffmpeg(args: list[str], *, timeout: int = 1800) -> None:
     binary = require_binary("ffmpeg")
     proc = await asyncio.create_subprocess_exec(
-        binary, "-hide_banner", "-loglevel", "error", "-y", "-filter_threads", "1", "-filter_complex_threads", "1", *args,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        binary, "-hide_banner", "-loglevel", "error", "-y", "-filter_threads", "1", "-filter_complex_threads", "1", *local_inputs(args),
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, env=decoder_env(),
     )
     try:
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -42,11 +55,11 @@ async def run_ffmpeg(args: list[str], *, timeout: int = 1800) -> None:
         raise FFmpegError("Échec FFmpeg : " + (diagnostic[:900] if diagnostic else "erreur inconnue"))
 
 
-async def probe_media(path: str) -> dict:
+async def probe_media(path: str, *, input_format: str | None = None) -> dict:
     binary = require_binary("ffprobe")
     proc = await asyncio.create_subprocess_exec(
-        binary, "-v", "error", "-show_streams", "-show_format", "-of", "json", path,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        binary, "-v", "error", "-protocol_whitelist", "file,pipe", *(["-f",input_format] if input_format else []), "-show_streams", "-show_format", "-of", "json", path,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=decoder_env(),
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)

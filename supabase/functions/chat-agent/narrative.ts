@@ -27,6 +27,7 @@ export function verifiedVisualEvidence(scene: any, shot: any, media: any): boole
       v.mediaRef !== shot.mediaRef || !quotedFromNarration(scene, v.narrationQuote) ||
       !clean(v.visualIntent) || v.hasContradiction !== false) return false;
   if (media.source === "search" && v.licenseChecked !== true) return false;
+  if(["artic","archive"].includes(media.provenance?.source)&&(!/^[a-f0-9]{64}$/.test(v.assetSha256??"")||v.contentSafetyChecked!==true||!Array.isArray(v.samples)||!v.samples.every((s:any)=>s.contentSafe===true)))return false;
   const needed = media.kind === "video" ? 3 : 1;
   if (!Array.isArray(v.samples) || v.samples.length < needed || v.samples.length > 4) return false;
   const times: number[] = [];

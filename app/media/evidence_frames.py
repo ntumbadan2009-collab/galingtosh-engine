@@ -11,7 +11,7 @@ import math
 import tempfile
 from pathlib import Path
 
-from app.media.ffmpeg import FFmpegError, probe_media, require_binary
+from app.media.ffmpeg import FFmpegError, probe_media, require_binary, decoder_env
 
 
 async def sample_visual_evidence(
@@ -37,12 +37,12 @@ async def sample_visual_evidence(
             cmd = [
                 ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
                 "-threads", "1", "-filter_threads", "1", "-ss", f"{at:.4f}",
-                "-i", str(source), "-frames:v", "1",
+                "-protocol_whitelist", "file,pipe", "-i", str(source), "-frames:v", "1",
                 "-vf", "scale='min(480,iw)':-2", "-q:v", "8", "-y", str(target),
             ]
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=decoder_env(),
             )
             try:
                 _, err = await asyncio.wait_for(process.communicate(), timeout=25)

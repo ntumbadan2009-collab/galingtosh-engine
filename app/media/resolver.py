@@ -64,8 +64,16 @@ def validate_remote_url(url: str) -> str:
     except (ValueError, UnicodeError):
         raise UnsafeMediaURL("URL média invalide.") from None
 
-async def download_public_media(url: str, destination: Path, max_bytes: int = MAX_REMOTE_BYTES) -> tuple[int, str]:
-    current = validate_remote_url(url)
+async def download_public_media(url: str, destination: Path, max_bytes: int = MAX_REMOTE_BYTES, *, allowed_hosts: tuple[str, ...] = ()) -> tuple[int, str]:
+    def checked(value: str) -> str:
+        result = validate_remote_url(value)
+        if allowed_hosts:
+            parsed = urlsplit(result)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or parsed.port not in (None, 443) or not any(host == domain or host.endswith("." + domain) for domain in allowed_hosts):
+                raise UnsafeMediaURL("Hôte ou redirection Web non autorisé.")
+        return result
+    current = checked(url)
     connector = aiohttp.TCPConnector(resolver=SafePublicResolver(), use_dns_cache=False, limit=2)
     timeout = aiohttp.ClientTimeout(total=45, connect=10, sock_read=20)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +85,7 @@ async def download_public_media(url: str, destination: Path, max_bytes: int = MA
                         location = response.headers.get("Location")
                         if not location or hop == 3:
                             raise UnsafeMediaURL("Redirection média refusée.")
-                        current = validate_remote_url(urljoin(current, location))
+                        current = checked(urljoin(current, location))
                         continue
                     if response.status < 200 or response.status >= 300:
                         raise OSError("Téléchargement média refusé.")

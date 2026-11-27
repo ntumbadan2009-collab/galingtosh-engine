@@ -1,5 +1,7 @@
 from __future__ import annotations
 import shutil
+import base64
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -7,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from app.security import require_engine_secret
 from app.media.resolver import download_public_media
+from app.media.secure_web import is_extended, download_extended, clean_image, digest, contact_sheet
 from app.media.ffmpeg import probe_media, FFmpegError
 from app.storage.supabase import SupabaseREST
 
@@ -41,7 +44,7 @@ async def probe(request: Request, payload: ProbeRequest) -> dict[str, Any]:
             url = provenance.get("download_url") or provenance.get("preview_url")
             if not url:
                 raise HTTPException(status_code=422, detail="URL du média absente.")
-            await download_public_media(str(url), target, 200 * 1024 * 1024)
+            await (download_extended(row, target) if is_extended(row) else download_public_media(str(url), target, 200 * 1024 * 1024))
         else:
             raise HTTPException(status_code=422, detail="Source média non prise en charge.")
         result = await probe_media(str(target))
@@ -112,7 +115,7 @@ async def inspect_clips(request: Request, payload: InspectClipsRequest) -> dict[
             url = provenance.get("download_url") or provenance.get("preview_url")
             if not url:
                 raise HTTPException(status_code=422, detail="URL du média absente.")
-            await download_public_media(str(url), target, 200 * 1024 * 1024)
+            await (download_extended(row, target) if is_extended(row) else download_public_media(str(url), target, 200 * 1024 * 1024))
         else:
             raise HTTPException(status_code=422, detail="Source média non prise en charge.")
         result = await inspect_video_passages(
@@ -172,12 +175,14 @@ async def evidence_frames(request: Request, payload: EvidenceFramesRequest) -> d
             url = provenance.get("download_url") or provenance.get("preview_url")
             if not url:
                 raise HTTPException(status_code=422, detail="URL source absente.")
-            await download_public_media(str(url), target, 200*1024*1024)
+            await (download_extended(media, target) if is_extended(media) else download_public_media(str(url), target, 200*1024*1024))
         else:
             raise HTTPException(status_code=422, detail="Source média non prise en charge.")
-        return {"mediaId": payload.media_id, **await sample_visual_evidence(
-            target, payload.source_in_sec, payload.duration_sec,
-        )}
+        result = await sample_visual_evidence(target, payload.source_in_sec, payload.duration_sec)
+        if is_extended(media):
+            result["sha256"] = await asyncio.to_thread(digest,target)
+            result["safetyContactSheet"] = await contact_sheet(target,directory/"sheet.jpg",payload.source_in_sec,payload.duration_sec)
+        return {"mediaId":payload.media_id,**result}
     except HTTPException:
         raise
     except (OSError, ValueError, FFmpegError):
@@ -212,3 +217,23 @@ async def audio_evidence(request:Request,payload:AudioEvidenceRequest)->dict[str
     except (OSError,ValueError,FFmpegError):
         raise HTTPException(status_code=422,detail="Extrait audio réel non exploitable.") from None
     finally:shutil.rmtree(directory,ignore_errors=True)
+
+@user_router.post("/secure-image-evidence")
+async def secure_image_evidence(request:Request,payload:ProbeRequest)->dict[str,Any]:
+    db=getattr(request.app.state,"supabase",None)
+    if not isinstance(db,SupabaseREST):raise HTTPException(status_code=503,detail="Stockage indisponible.")
+    token=request.headers.get("Authorization","").removeprefix("Bearer ").strip()
+    mission=request.headers.get("X-Production-Mission","")
+    uid=await (db.production_user_id(token,mission) if mission else db.authenticated_user_id(token))
+    if not uid or uid!=payload.user_id:raise HTTPException(status_code=401,detail="Session invalide.")
+    rows=await db.read_media_assets(payload.project_id,[payload.media_id])
+    if not rows or rows[0].get("user_id")!=uid or rows[0].get("kind")!="image" or not is_extended(rows[0]):
+        raise HTTPException(status_code=404,detail="Image Web introuvable.")
+    with tempfile.TemporaryDirectory(prefix="gt-secure-image-") as work:
+        source=Path(work)/"raw"; thumb=Path(work)/"proof.jpg"
+        try:
+            await download_extended(rows[0],source)
+            await asyncio.to_thread(clean_image,source,thumb,480)
+            return {"sha256":await asyncio.to_thread(digest,source),"jpegBase64":base64.b64encode(thumb.read_bytes()).decode("ascii")}
+        except (OSError,ValueError,FFmpegError):
+            raise HTTPException(status_code=422,detail="Image Web refusée.") from None
