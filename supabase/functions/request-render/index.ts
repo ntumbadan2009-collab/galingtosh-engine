@@ -2,8 +2,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, json } from "./cors.ts";
 
-declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
-
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENGINE_ROOT = Deno.env.get("RENDER_ENGINE_URL") ?? "https://galingtosh-engine.onrender.com";
 
