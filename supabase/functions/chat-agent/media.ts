@@ -1,3 +1,4 @@
+import {artInstitute,archiveSearch,discoverWeb,safeMetadata,extendedEnabled,extendedSource} from "./web_media.ts";
 // Recherche centralisée de médias. Les clés API restent côté serveur (Vault via get_media_keys(), sinon variables d'environnement).
 // Chaque résultat conserve sa provenance : auteur, source, licence, URL, restrictions.
 // Aucun média n'est jamais présenté comme « libre de droits » par défaut.
@@ -20,6 +21,7 @@ export interface MediaResult {
   duration?: number;
   size_bytes?: number;
   attribution?: string;
+  published_at?: string;
 }
 
 export type Keys = Record<string, string>;
@@ -30,7 +32,7 @@ const UA = "Galingtosh/0.1 (media search)";
 const NO_AUTHOR = "Auteur non précisé";
 const NO_LICENSE = "Licence non précisée";
 
-const KEY_NAMES = ["PIXABAY_API_KEY", "PEXELS_API_KEY", "FREESOUND_API_KEY"];
+const KEY_NAMES = ["PIXABAY_API_KEY", "PEXELS_API_KEY", "FREESOUND_API_KEY", "BRAVE_SEARCH_API_KEY"];
 let keysCache: { at: number; k: Keys } | null = null;
 
 // Clés des fournisseurs de médias : Vault (via get_media_keys, service_role uniquement) puis variables d'environnement.
@@ -269,6 +271,8 @@ const ADAPTERS: Record<string, { env?: string; kinds: string[]; fn: (q: Q) => Pr
   pexels: { env: "PEXELS_API_KEY", kinds: ["image", "video"], fn: pexels },
   pixabay: { env: "PIXABAY_API_KEY", kinds: ["image", "illustration", "vector", "video"], fn: pixabay },
   freesound: { env: "FREESOUND_API_KEY", kinds: ["audio"], fn: freesound },
+  artic: { kinds: ["image","illustration"], fn: ({query,limit})=>artInstitute(query,limit) },
+  archive: { kinds: ["image","video"], fn: ({query,kind,limit})=>archiveSearch(query,kind,limit) },
   polyhaven: { kinds: ["model3d"], fn: polyhaven },
 };
 
@@ -286,15 +290,19 @@ export async function searchMedia(
   for (const s of wanted) {
     const a = ADAPTERS[s];
     if (!a.kinds.includes(p.kind)) continue;
+    if (extendedSource(s) && !extendedEnabled()) { skipped[s]='extension en quarantaine; validation requise'; continue; }
     if (a.env && !keys[a.env]) { skipped[s] = `clé ${a.env} non configurée`; continue; }
     active.push(s);
   }
   const errors: Record<string, string> = {};
+  const discovery = keys.BRAVE_SEARCH_API_KEY && safeMetadata(p.query)
+    ? discoverWeb(p.query,p.kind,keys.BRAVE_SEARCH_API_KEY,limit).catch(()=>[])
+    : Promise.resolve([]);
   const settled = await Promise.allSettled(active.map((s) => ADAPTERS[s].fn({ query: p.query, kind: p.kind, limit, keys })));
   const lists: MediaResult[][] = [];
   settled.forEach((r, i) => {
     if (r.status === "fulfilled") {
-      lists.push(r.value.map((x) => ({ ...x, restrictions: restrictionsFor(x.license) })));
+      lists.push(r.value.filter(x=>safeMetadata(x.title,x.author,x.url,x.download_url,x.preview_url)).map((x) => ({ ...x, ...(extendedSource(x.source)?{preview_url:undefined}:{}), restrictions: restrictionsFor(x.license) })));
     } else {
       errors[active[i]] = String(r.reason?.message ?? r.reason).slice(0, 120);
     }
@@ -308,6 +316,6 @@ export async function searchMedia(
     }
     if (!any) break;
   }
-  return { results, searched: active, skipped, errors };
+  return { results, searched: active, skipped, errors, web_references:await discovery };
 }
 
