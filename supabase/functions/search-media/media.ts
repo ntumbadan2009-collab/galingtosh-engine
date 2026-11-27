@@ -1,3 +1,4 @@
+import {artInstitute,archiveSearch,discoverWeb,smithsonianSearch,safeMetadata,extendedEnabled,extendedSource,institutionalReference,type WebReference} from "./web_media.ts";
 // Recherche centralisée de médias. Les clés API restent côté serveur (Vault via get_media_keys(), sinon variables d'environnement).
 // Chaque résultat conserve sa provenance : auteur, source, licence, URL, restrictions.
 // Aucun média n'est jamais présenté comme « libre de droits » par défaut.
@@ -20,6 +21,7 @@ export interface MediaResult {
   duration?: number;
   size_bytes?: number;
   attribution?: string;
+  published_at?: string;
 }
 
 export type Keys = Record<string, string>;
@@ -30,7 +32,7 @@ const UA = "Galingtosh/0.1 (media search)";
 const NO_AUTHOR = "Auteur non précisé";
 const NO_LICENSE = "Licence non précisée";
 
-const KEY_NAMES = ["PIXABAY_API_KEY", "PEXELS_API_KEY", "FREESOUND_API_KEY"];
+const KEY_NAMES = ["PIXABAY_API_KEY", "PEXELS_API_KEY", "FREESOUND_API_KEY", "BRAVE_SEARCH_API_KEY", "SMITHSONIAN_API_KEY"];
 let keysCache: { at: number; k: Keys } | null = null;
 
 // Clés des fournisseurs de médias : Vault (via get_media_keys, service_role uniquement) puis variables d'environnement.
@@ -269,32 +271,47 @@ const ADAPTERS: Record<string, { env?: string; kinds: string[]; fn: (q: Q) => Pr
   pexels: { env: "PEXELS_API_KEY", kinds: ["image", "video"], fn: pexels },
   pixabay: { env: "PIXABAY_API_KEY", kinds: ["image", "illustration", "vector", "video"], fn: pixabay },
   freesound: { env: "FREESOUND_API_KEY", kinds: ["audio"], fn: freesound },
+  artic: { kinds: ["image","illustration"], fn: ({query,limit})=>artInstitute(query,limit) },
+  smithsonian: { env:"SMITHSONIAN_API_KEY", kinds:["image","illustration"], fn:({query,limit,keys})=>smithsonianSearch(query,keys.SMITHSONIAN_API_KEY,limit) },
+  archive: { kinds: ["image","video"], fn: ({query,kind,limit})=>archiveSearch(query,kind,limit) },
   polyhaven: { kinds: ["model3d"], fn: polyhaven },
 };
 
-export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "audio", "model3d"];
-export const MEDIA_SOURCES = Object.keys(ADAPTERS);
+export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "model3d", "news"];
+export const MEDIA_SOURCES = [...Object.keys(ADAPTERS),"brave"];
 
 export async function searchMedia(
   p: { query: string; kind: string; limit?: number; sources?: string[] },
   keys: Keys = {},
 ) {
-  const limit = Math.max(1, Math.min(p.limit ?? 8, 20));
+  const limit = Math.max(1, Math.min(Math.floor(Number(p.limit)||8), 20));
   const wanted = (p.sources?.length ? p.sources : Object.keys(ADAPTERS)).filter((s) => ADAPTERS[s]);
   const skipped: Record<string, string> = {};
   const active: string[] = [];
   for (const s of wanted) {
     const a = ADAPTERS[s];
     if (!a.kinds.includes(p.kind)) continue;
+    // Search metadata from institutional sources even when import is disabled.
     if (a.env && !keys[a.env]) { skipped[s] = `clé ${a.env} non configurée`; continue; }
     active.push(s);
   }
   const errors: Record<string, string> = {};
+  const references: WebReference[] = [];
+  const braveWanted=(!p.sources?.length||p.sources.includes("brave"))&&p.kind!=="audio";
+  if(braveWanted&&!keys.BRAVE_SEARCH_API_KEY) skipped.brave="clé BRAVE_SEARCH_API_KEY non configurée";
+  const discovery = braveWanted && keys.BRAVE_SEARCH_API_KEY && safeMetadata(p.query)
+    ? discoverWeb(p.query,p.kind,keys.BRAVE_SEARCH_API_KEY,Math.min(limit,3)).catch((e)=>{errors.brave=/^HTTP \d{3}$/.test(String(e?.message))?String(e.message):"recherche indisponible";return [];})
+    : Promise.resolve([]);
   const settled = await Promise.allSettled(active.map((s) => ADAPTERS[s].fn({ query: p.query, kind: p.kind, limit, keys })));
   const lists: MediaResult[][] = [];
   settled.forEach((r, i) => {
     if (r.status === "fulfilled") {
-      lists.push(r.value.map((x) => ({ ...x, restrictions: restrictionsFor(x.license) })));
+      if(extendedSource(active[i])&&!extendedEnabled()){
+        for(const x of r.value){const ref=institutionalReference(x);if(ref)references.push(ref);}
+        skipped[active[i]]="références seules; import en quarantaine";
+        return;
+      }
+      lists.push(r.value.filter(x=>safeMetadata(x.title,x.author,x.url,x.download_url,x.preview_url)).map((x) => ({ ...x, ...(extendedSource(x.source)?{preview_url:undefined}:{}), restrictions: restrictionsFor(x.license) })));
     } else {
       errors[active[i]] = String(r.reason?.message ?? r.reason).slice(0, 120);
     }
@@ -308,6 +325,7 @@ export async function searchMedia(
     }
     if (!any) break;
   }
-  return { results, searched: active, skipped, errors };
+  const brave=await discovery;
+  return { results, searched: [...active,...(braveWanted&&keys.BRAVE_SEARCH_API_KEY?["brave"]:[])], skipped, errors, web_references:[...brave,...references].slice(0,limit+3) };
 }
 

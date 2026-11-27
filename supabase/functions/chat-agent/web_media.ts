@@ -1,5 +1,5 @@
 // Web references are discovery only: search results never establish reuse rights.
-export type WebReference={title:string;url:string;published?:string;kind:string;importable:false};
+export type WebReference={title:string;url:string;published?:string;kind:string;source?:string;license?:string;importable:false};
 const adult=/\b(?:porn(?:ography|hub|ographique)?|xxx|nsfw|hentai|gore|snuff|nude|nudity|pornographie|nudité|décapitation|torture|sexually explicit)\b/iu;
 const badHost=/(?:^|[.-])(?:pornhub|xvideos|xnxx|xhamster|redtube|onlyfans|youporn|rule34)(?:[.-]|$)/i;
 export function safeMetadata(...values:unknown[]):boolean{
@@ -27,7 +27,7 @@ export function webReferences(raw:any,kind:string):WebReference[]{
  return (Array.isArray(raw?.results)?raw.results:[]).flatMap((r:any)=>{
  const url=httpsUrl(r.url);const title=typeof r.title==="string"?r.title.slice(0,300):"";
  if(!url||!title||!safeMetadata(title,r.description,url))return [];
- return [{title,url,published:typeof r.page_age==="string"?r.page_age:undefined,kind,importable:false as const}];});
+ return [{title,url,published:typeof r.page_age==="string"?r.page_age:undefined,kind,source:"brave",importable:false as const}];});
 }
 export async function discoverWeb(query:string,kind:string,key:string,limit:number):Promise<WebReference[]>{
  if(!safeMetadata(query))return [];
@@ -95,3 +95,9 @@ export async function smithsonianSearch(query:string,key:string,limit:number){
 }
 export const extendedSource=(source:unknown)=>source==="artic"||source==="archive"||source==="smithsonian";
 export const extendedEnabled=()=>Deno.env.get("SECURE_WEB_MEDIA_ENABLED")==="true";
+
+// Metadata-only candidates remain useful while import is quarantined. Never expose a raw file URL or an attachable result ID.
+export function institutionalReference(x:any):WebReference|null {
+ const url=httpsUrl(x?.url);if(!url||!extendedSource(x?.source)||typeof x?.title!=="string"||!safeMetadata(x.title,x.author,url))return null;
+ return {title:x.title.slice(0,300),url,kind:x.kind,source:x.source,license:x.license,published:typeof x.published_at==="string"?x.published_at:undefined,importable:false};
+}

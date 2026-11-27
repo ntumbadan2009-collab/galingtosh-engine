@@ -18,3 +18,10 @@ Deno.test("Smithsonian uses per-asset CC0 and never returns the Voyager URL",()=
  const raw={response:{rows:[{id:"test",title:"Specimen",content:{descriptiveNonRepeating:{online_media:{media:[{type:"3d_voyager",usage:{access:"CC0"},content:"https://3d-api.si.edu/voyager/abc",thumbnail:"https://3d-api.si.edu/content/abc.jpg"},{type:"Images",usage:{access:"Usage conditions apply"},content:"https://ids.si.edu/test"}]}}}}]}};
  const r=smithsonianCandidates(raw,5);check(r.length===1&&r[0].kind==="image"&&r[0].download_url.endsWith(".jpg"));
 });
+
+import {institutionalReference} from "./web_media.ts";
+Deno.test("quarantined institutional references cannot be attached or downloaded directly",()=>{
+ const ref=institutionalReference({source:"archive",title:"Nature",kind:"video",url:"https://archive.org/details/sample",id:"archive:sample",download_url:"https://archive.org/download/sample/movie.mp4",license:"CC BY 4.0"});
+ check(ref?.importable===false&&ref?.source==="archive"&&!("id" in ref!)&&!("download_url" in ref!));
+ check(institutionalReference({source:"archive",title:"NSFW",kind:"video",url:"https://archive.org/details/sample"})===null);
+});

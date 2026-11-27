@@ -9,3 +9,6 @@ Base: V33, branche rebuild/stable-2026-11-26. Ne pas fusionner main ni déployer
 - Les modèles GLB/OBJ/Blender externes sont exclus de l'import réel, jusqu'à un worker de conversion hors réseau sans secrets, avec limites CPU/RAM/disque. Une image d'illustration 3D reste possible.
 - La recherche actualité fournit des pistes; ne prétend pas vérifier les événements. Pour documents récents, vérifier source primaire, date effective, lieu et preuve indépendante; aucun média générique présenté comme une image de l'événement.
 - Avant activation: scanner et sandbox OS dédiée sans secrets/montages sensibles/egress; tests de corruption, décompression, DNS rebinding, régression FFmpeg; vérifier licences de chaque fournisseur et faux positifs de modération; limiter quotas et timeouts; test complet avec vrais fournisseurs et plusieurs durées. La V33 reste inchangée.
+
+## Publication progressive
+L'agent et search-media peuvent découvrir les métadonnées de sources institutionnelles même lorsque l'import est désactivé. Ces résultats sont renvoyés uniquement sous web_references (sans identifiant attachable ni URL de téléchargement). Brave est borné à trois références par recherche. L'import reste bloqué jusqu'à validation du worker isolé.

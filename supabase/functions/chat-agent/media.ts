@@ -1,4 +1,4 @@
-import {artInstitute,archiveSearch,discoverWeb,smithsonianSearch,safeMetadata,extendedEnabled,extendedSource} from "./web_media.ts";
+import {artInstitute,archiveSearch,discoverWeb,smithsonianSearch,safeMetadata,extendedEnabled,extendedSource,institutionalReference,type WebReference} from "./web_media.ts";
 // Recherche centralisée de médias. Les clés API restent côté serveur (Vault via get_media_keys(), sinon variables d'environnement).
 // Chaque résultat conserve sa provenance : auteur, source, licence, URL, restrictions.
 // Aucun média n'est jamais présenté comme « libre de droits » par défaut.
@@ -278,31 +278,39 @@ const ADAPTERS: Record<string, { env?: string; kinds: string[]; fn: (q: Q) => Pr
 };
 
 export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "model3d", "news"];
-export const MEDIA_SOURCES = Object.keys(ADAPTERS);
+export const MEDIA_SOURCES = [...Object.keys(ADAPTERS),"brave"];
 
 export async function searchMedia(
   p: { query: string; kind: string; limit?: number; sources?: string[] },
   keys: Keys = {},
 ) {
-  const limit = Math.max(1, Math.min(p.limit ?? 8, 20));
+  const limit = Math.max(1, Math.min(Math.floor(Number(p.limit)||8), 20));
   const wanted = (p.sources?.length ? p.sources : Object.keys(ADAPTERS)).filter((s) => ADAPTERS[s]);
   const skipped: Record<string, string> = {};
   const active: string[] = [];
   for (const s of wanted) {
     const a = ADAPTERS[s];
     if (!a.kinds.includes(p.kind)) continue;
-    if (extendedSource(s) && !extendedEnabled()) { skipped[s]='extension en quarantaine; validation requise'; continue; }
+    // Search metadata from institutional sources even when import is disabled.
     if (a.env && !keys[a.env]) { skipped[s] = `clé ${a.env} non configurée`; continue; }
     active.push(s);
   }
   const errors: Record<string, string> = {};
-  const discovery = keys.BRAVE_SEARCH_API_KEY && safeMetadata(p.query)
-    ? discoverWeb(p.query,p.kind,keys.BRAVE_SEARCH_API_KEY,limit).catch(()=>[])
+  const references: WebReference[] = [];
+  const braveWanted=(!p.sources?.length||p.sources.includes("brave"))&&p.kind!=="audio";
+  if(braveWanted&&!keys.BRAVE_SEARCH_API_KEY) skipped.brave="clé BRAVE_SEARCH_API_KEY non configurée";
+  const discovery = braveWanted && keys.BRAVE_SEARCH_API_KEY && safeMetadata(p.query)
+    ? discoverWeb(p.query,p.kind,keys.BRAVE_SEARCH_API_KEY,Math.min(limit,3)).catch((e)=>{errors.brave=/^HTTP \d{3}$/.test(String(e?.message))?String(e.message):"recherche indisponible";return [];})
     : Promise.resolve([]);
   const settled = await Promise.allSettled(active.map((s) => ADAPTERS[s].fn({ query: p.query, kind: p.kind, limit, keys })));
   const lists: MediaResult[][] = [];
   settled.forEach((r, i) => {
     if (r.status === "fulfilled") {
+      if(extendedSource(active[i])&&!extendedEnabled()){
+        for(const x of r.value){const ref=institutionalReference(x);if(ref)references.push(ref);}
+        skipped[active[i]]="références seules; import en quarantaine";
+        return;
+      }
       lists.push(r.value.filter(x=>safeMetadata(x.title,x.author,x.url,x.download_url,x.preview_url)).map((x) => ({ ...x, ...(extendedSource(x.source)?{preview_url:undefined}:{}), restrictions: restrictionsFor(x.license) })));
     } else {
       errors[active[i]] = String(r.reason?.message ?? r.reason).slice(0, 120);
@@ -317,6 +325,7 @@ export async function searchMedia(
     }
     if (!any) break;
   }
-  return { results, searched: active, skipped, errors, web_references:await discovery };
+  const brave=await discovery;
+  return { results, searched: [...active,...(braveWanted&&keys.BRAVE_SEARCH_API_KEY?["brave"]:[])], skipped, errors, web_references:[...brave,...references].slice(0,limit+3) };
 }
 
