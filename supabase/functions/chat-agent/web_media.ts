@@ -7,7 +7,7 @@ export function safeMetadata(...values:unknown[]):boolean{
 }
 export function httpsUrl(value:unknown):string|null{
  try{if(typeof value!=="string"||value.length>2048)return null;const u=new URL(value);
- if(u.protocol!=="https:"||u.username||u.password||u.port||!u.hostname.includes(".")||/^\d|^\[|(?:^|\.)(?:localhost|local|internal|lan)$/.test(u.hostname)||!safeMetadata(u.hostname,u.pathname))return null;
+ if(u.protocol!=="https:"||u.username||u.password||u.port||!u.hostname.includes(".")||/^\d+(?:\.\d+){3}$|^\[|(?:^|\.)(?:localhost|local|internal|lan)$/.test(u.hostname)||!safeMetadata(u.hostname,u.pathname))return null;
  u.hash="";return u.toString();}catch{return null;}
 }
 export function publicLicense(value:unknown):{license:string;license_url:string}|null{
