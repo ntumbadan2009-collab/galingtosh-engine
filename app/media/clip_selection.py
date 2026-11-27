@@ -11,7 +11,7 @@ import math
 import re
 from pathlib import Path
 
-from app.media.ffmpeg import FFmpegError, probe_media, require_binary
+from app.media.ffmpeg import FFmpegError, probe_media, require_binary, decoder_env
 
 _PTS = re.compile(r"pts_time:\s*([0-9]+(?:\.[0-9]+)?)")
 MAX_INSPECTION_SECONDS = 300.0
@@ -51,9 +51,9 @@ async def inspect_video_passages(
     process = await asyncio.create_subprocess_exec(
         ffmpeg, "-hide_banner", "-nostdin", "-threads", "1",
         "-filter_threads", "1", "-loglevel", "info",
-        "-i", str(source), "-t", f"{analyzed_seconds:.3f}",
+        "-protocol_whitelist", "file,pipe", "-i", str(source), "-t", f"{analyzed_seconds:.3f}",
         "-vf", filter_expression, "-an", "-f", "null", "-",
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, env=decoder_env(),
     )
     try:
         _, stderr = await asyncio.wait_for(process.communicate(), timeout=75)
@@ -173,12 +173,12 @@ async def sample_candidate_frames(
         output_pattern = str(Path(directory) / "sample_%04d.jpg")
         process = await asyncio.create_subprocess_exec(
             ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-            "-i", str(source), "-t", f"{window:.3f}",
+            "-protocol_whitelist", "file,pipe", "-i", str(source), "-t", f"{window:.3f}",
             "-vf", f"select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval_seconds:g}),scale=320:-2",
             "-fps_mode", "vfr",
             "-frames:v", str(frame_count),
             "-q:v", "9", output_pattern,
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, env=decoder_env(),
         )
         try:
             _, error = await asyncio.wait_for(process.communicate(), timeout=75)

@@ -1,4 +1,4 @@
-import {artInstitute,archiveSearch,discoverWeb,safeMetadata,extendedEnabled,extendedSource} from "./web_media.ts";
+import {artInstitute,archiveSearch,discoverWeb,smithsonianSearch,safeMetadata,extendedEnabled,extendedSource} from "./web_media.ts";
 // Recherche centralisée de médias. Les clés API restent côté serveur (Vault via get_media_keys(), sinon variables d'environnement).
 // Chaque résultat conserve sa provenance : auteur, source, licence, URL, restrictions.
 // Aucun média n'est jamais présenté comme « libre de droits » par défaut.
@@ -32,7 +32,7 @@ const UA = "Galingtosh/0.1 (media search)";
 const NO_AUTHOR = "Auteur non précisé";
 const NO_LICENSE = "Licence non précisée";
 
-const KEY_NAMES = ["PIXABAY_API_KEY", "PEXELS_API_KEY", "FREESOUND_API_KEY", "BRAVE_SEARCH_API_KEY"];
+const KEY_NAMES = ["PIXABAY_API_KEY", "PEXELS_API_KEY", "FREESOUND_API_KEY", "BRAVE_SEARCH_API_KEY", "SMITHSONIAN_API_KEY"];
 let keysCache: { at: number; k: Keys } | null = null;
 
 // Clés des fournisseurs de médias : Vault (via get_media_keys, service_role uniquement) puis variables d'environnement.
@@ -272,11 +272,12 @@ const ADAPTERS: Record<string, { env?: string; kinds: string[]; fn: (q: Q) => Pr
   pixabay: { env: "PIXABAY_API_KEY", kinds: ["image", "illustration", "vector", "video"], fn: pixabay },
   freesound: { env: "FREESOUND_API_KEY", kinds: ["audio"], fn: freesound },
   artic: { kinds: ["image","illustration"], fn: ({query,limit})=>artInstitute(query,limit) },
+  smithsonian: { env:"SMITHSONIAN_API_KEY", kinds:["image","illustration"], fn:({query,limit,keys})=>smithsonianSearch(query,keys.SMITHSONIAN_API_KEY,limit) },
   archive: { kinds: ["image","video"], fn: ({query,kind,limit})=>archiveSearch(query,kind,limit) },
   polyhaven: { kinds: ["model3d"], fn: polyhaven },
 };
 
-export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "model3d"];
+export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "model3d", "news"];
 export const MEDIA_SOURCES = Object.keys(ADAPTERS);
 
 export async function searchMedia(

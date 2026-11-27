@@ -6,7 +6,7 @@ from PIL import Image, ImageOps
 from app.media.resolver import download_public_media
 from app.media.ffmpeg import probe_media, run_ffmpeg
 
-SOURCES = {"artic": ("artic.edu",), "archive": ("archive.org",)}
+SOURCES = {"artic": ("artic.edu",), "archive": ("archive.org",), "smithsonian": ("ids.si.edu","3d-api.si.edu")}
 LICENSES = {"CC0 1.0", "CC BY 4.0", "CC BY 3.0", "CC BY 2.5", "CC BY 2.0", "CC BY 1.0", "Public Domain Mark 1.0"}
 
 def is_extended(row: dict) -> bool:

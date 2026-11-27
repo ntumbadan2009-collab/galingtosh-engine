@@ -101,7 +101,7 @@ export const TOOLS: ToolDef[] = [
     { scene_id: S(), mood: E(["silence", "calm", "hopeful", "tense", "sad", "wonder", "neutral"]), intensity: N("0 à 1") }, ["scene_id", "mood"]),
   tool("update_subtitles", "Remplace les sous-titres d'une langue (ou d'une piste).",
     { language: S(), track_id: S(), cues: { type: "array", items: { type: "object", properties: { startSec: N(), endSec: N(), text: S() }, required: ["startSec", "endSec", "text"] } } }, ["language", "cues"]),
-  tool("search_media", "Cherche des médias existants (Wikimedia Commons, Openverse, Pexels, Pixabay, Freesound, Poly Haven). Retourne licence, auteur et restrictions : ne jamais les présenter comme « libres de droits » sans les citer.",
+  tool("search_media", "Cherche des médias existants et des références Web. results contient les candidats à importer avec licence et auteur; web_references contient des pistes NON importables (actualité, images, vidéos et 3D). Ne considère ni un titre ni une date de page comme preuve d’un événement. Ne jamais inventer une licence.",
     { query: S(), kind: E(MEDIA_SEARCH_KINDS), limit: N(), sources: { type: "array", items: E(MEDIA_SOURCES) } }, ["query", "kind"]),
   tool("add_found_media", "Enregistre dans le projet un résultat de search_media (par son result_id) avec sa provenance, et l'attache éventuellement à un plan.",
     { result_id: S(), shot_id: S() }, ["result_id"]),
@@ -316,6 +316,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         }
         if (!found) throw new Error("result_id inconnu : il doit provenir d'un search_media de cette conversation.");
 
+        if(found.kind==="model3d")throw Error("Modèle 3D brut non pris en charge : utiliser une illustration 3D sous licence.");
         if(extendedSource(found.source)&&(!extendedEnabled()||!publicLicense(found.license_url)||!httpsUrl(found.download_url)||!safeMetadata(found.title,found.author,found.url)))throw Error('Média Web non autorisé.');
         if (args.shot_id) {
           const working = await loadWorking(ctx);

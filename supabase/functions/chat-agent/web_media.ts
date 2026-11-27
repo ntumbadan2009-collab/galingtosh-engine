@@ -27,7 +27,7 @@ export function webReferences(raw:any,kind:string):WebReference[]{
  return (Array.isArray(raw?.results)?raw.results:[]).flatMap((r:any)=>{
  const url=httpsUrl(r.url);const title=typeof r.title==="string"?r.title.slice(0,300):"";
  if(!url||!title||!safeMetadata(title,r.description,url))return [];
- return [{title,url,published:typeof r.age==="string"?r.age:typeof r.page_age==="string"?r.page_age:undefined,kind,importable:false as const}];});
+ return [{title,url,published:typeof r.page_age==="string"?r.page_age:undefined,kind,importable:false as const}];});
 }
 export async function discoverWeb(query:string,kind:string,key:string,limit:number):Promise<WebReference[]>{
  if(!safeMetadata(query))return [];
@@ -67,5 +67,29 @@ export async function archiveSearch(query:string,kind:string,limit:number){
  const items=await Promise.allSettled((raw.response?.docs??[]).slice(0,6).map((r:any)=>typeof r.identifier==="string"&&/^[A-Za-z0-9_.-]{1,120}$/.test(r.identifier)?json(new URL("https://archive.org/metadata/"+encodeURIComponent(r.identifier))):Promise.resolve(null)));
  return items.flatMap(r=>r.status==="fulfilled"?archiveCandidates(r.value,kind):[]).slice(0,limit);
 }
-export const extendedSource=(source:unknown)=>source==="artic"||source==="archive";
+// Smithsonian 3D: safely import the institution-provided CC0 JPEG preview,
+ // never download a Voyager HTML scene or execute a 3D file.
+export function smithsonianCandidates(raw:any,limit:number){
+ const out:any[]=[];
+ for(const row of raw?.response?.rows??[]){
+   const c=row?.content??{},title=typeof row.title==="string"?row.title:"";
+   if(!title||!safeMetadata(title)||typeof row.id!=="string")continue;
+   for(const asset of c.descriptiveNonRepeating?.online_media?.media??[]){
+     if(asset.usage?.access!=="CC0"||!["Images","3d_voyager"].includes(asset.type))continue;
+     const preview=httpsUrl(asset.type==="3d_voyager"?asset.thumbnail:asset.content);
+     if(!preview||!["ids.si.edu","3d-api.si.edu"].includes(new URL(preview).hostname))continue;
+     const url="https://www.si.edu/object/"+encodeURIComponent(row.id);
+     const author=String(c.descriptiveNonRepeating?.data_source??"Smithsonian Institution");
+     out.push({id:"smithsonian:"+row.id+":"+out.length,source:"smithsonian",kind:"image",subtype:asset.type==="3d_voyager"?"3d_preview":"photo",title,author,license:"CC0 1.0",license_url:"https://creativecommons.org/publicdomain/zero/1.0/",url,download_url:preview,attribution:author+" — "+title+" — "+url});
+     if(out.length>=limit)return out;
+   }
+ }
+ return out;
+}
+export async function smithsonianSearch(query:string,key:string,limit:number){
+ const u=new URL("https://api.si.edu/openaccess/api/v1.0/search");
+ u.searchParams.set("api_key",key);u.searchParams.set("q",query);u.searchParams.set("rows",String(Math.min(20,limit)));
+ return smithsonianCandidates(await json(u),limit);
+}
+export const extendedSource=(source:unknown)=>source==="artic"||source==="archive"||source==="smithsonian";
 export const extendedEnabled=()=>Deno.env.get("SECURE_WEB_MEDIA_ENABLED")==="true";

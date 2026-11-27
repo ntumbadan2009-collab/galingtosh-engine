@@ -1,0 +1,26 @@
+name: Secure web media candidate
+on:
+  push:
+    branches: [feature/secure-web-media-v34]
+  pull_request:
+    branches: [rebuild/stable-2026-11-26, main]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libcairo2 fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q app
+      - run: python -m pytest -q tests/test_secure_web.py tests/test_media_resolver.py tests/test_evidence_frames.py tests/test_narrative_policy.py tests/test_renderer.py
+      - run: deno check supabase/functions/chat-agent/index.ts
+      - run: deno test --allow-env supabase/functions/chat-agent/web_media_test.ts supabase/functions/chat-agent/production_test.ts supabase/functions/chat-agent/narrative.test.ts
