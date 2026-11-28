@@ -38,3 +38,10 @@ Deno.test("two publications from the same organization are not independent evide
  let rejected=false;try{materializeEvidence(sources,p,{reason:"Test",sentences:[{text:"Le système a été publié.",evidenceIds:[p[0].id,p[1].id]}]})}catch{rejected=true}
  if(!rejected)throw Error("same organization accepted");
 });
+
+import {dataCiteSources} from "./research.ts";
+Deno.test("DataCite accepts real abstracts and canonicalizes related preprints",()=>{
+ const attributes={doi:"10.48550/arxiv.2303.08774",types:{resourceTypeGeneral:"Preprint"},titles:[{title:"Technical report"}],publisher:"arXiv",descriptions:[{descriptionType:"Abstract",description:"The system was evaluated on multiple tests. ".repeat(5)}],relatedIdentifiers:[{relatedIdentifierType:"DOI",relationType:"IsPreprintOf",relatedIdentifier:"10.1000/published"}]};
+ const sources=dataCiteSources({data:[{attributes},{attributes:{...attributes,doi:"10.1000/noabstract",descriptions:[]}},{attributes:{...attributes,doi:"10.1000/dataset",types:{resourceTypeGeneral:"Dataset"}}}]});
+ if(sources.length!==1||sources[0].workKey!=="10.1000/published"||!sources[0].title.startsWith("Prépublication"))throw Error("DataCite validation failed");
+});

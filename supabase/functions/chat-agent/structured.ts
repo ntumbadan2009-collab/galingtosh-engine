@@ -186,7 +186,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
    });
   }
   return step("structured_research",key,async()=>{
-   const r=await researchedNarration(ctx.cfg,scene.narration.text,q.result.query,q.result.englishQuery,q.result.alternateQuery,String(film.info?.language??"fr").split("-")[0],Number(scene.durationSec));
+   const r=await researchedNarration(ctx.cfg,scene.narration.text,q.result.query,q.result.englishQuery,q.result.alternateQuery,String(film.info?.language??"fr").split("-")[0],Number(scene.durationSec),history.filter(x=>x.kind==="structured_research"&&(x.result?.key===scene.id||x.result?.key===key)&&x.status==="failed").map(x=>String(x.result?.error??"")).slice(-3));
    let next=film;
    if(r.narration!==scene.narration.text)next=applyOperation(next,"set_scene_narration",{scene_id:scene.id,text:r.narration,targetDurationSec:scene.durationSec,language:scene.narration.language,voice:scene.narration.voice,ratePercent:scene.narration.ratePercent??0,pitchHz:scene.narration.pitchHz??0}).film;
    next=applyOperation(next,"record_documentary_review",{scene_id:scene.id,review:r.review}).film;
