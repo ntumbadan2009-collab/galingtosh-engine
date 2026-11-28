@@ -20,10 +20,45 @@ export async function chooseMontage(cfg:LlmCfg,batch:any,goal:string,plan:string
  if(!call)throw Error("Aucune décision de montage structurée.");
  return {raw:call.args,usage:result.usage};
 }
+/** Normalize optional artistic decisions only; never accept foreign targets. */
+export function normalizeMontage(src:any,batch:any,raw:any){
+ const scene=arr(src.scenes).find(s=>s.id===batch.sceneId);
+ if(!scene||!Array.isArray(batch.shotIds)||new Set(batch.shotIds).size!==batch.shotIds.length||!batch.shotIds.every((id:string)=>arr(scene.shots).some(s=>s.id===id)))throw Error("Périmètre de montage invalide.");
+ const repairs:string[]=[];
+ const rows=raw?.sceneId===batch.sceneId?arr(raw.decisions):[];
+ if(raw?.sceneId!==batch.sceneId)repairs.push("neutral_scope");
+ const decisions=batch.shotIds.map((id:string)=>{
+  const sh=arr(scene.shots).find(s=>s.id===id);
+  const duration=Number(sh.outSec)-Number(sh.inSec);
+  if(!Number.isFinite(duration)||duration<=0)throw Error("Durée du plan invalide.");
+  const matches=rows.filter(d=>d?.shotId===id);
+  const d=matches.length===1?matches[0]:{};
+  if(matches.length!==1)repairs.push(id+":neutral_missing_or_duplicate");
+  let camera=cameras.includes(d.camera)?d.camera:"keep";
+  if(sh.visualMode==="programmatic"&&!["keep","none"].includes(camera)){camera="keep";repairs.push(id+":programmatic_camera");}
+  let transition=transitions.includes(d.transition)?d.transition:"keep";
+  let transitionSeconds=0;
+  if(!["cut","keep"].includes(transition)){
+   const max=Math.min(1.2,duration/3);
+   if(max<.1||typeof d.transitionSeconds!=="number"||!Number.isFinite(d.transitionSeconds)||d.transitionSeconds<.1){transition="keep";repairs.push(id+":transition");}
+   else {transitionSeconds=Math.min(max,d.transitionSeconds);if(transitionSeconds!==d.transitionSeconds)repairs.push(id+":transition_clamped");}
+  }
+  let sound=sounds.includes(d.sound)?d.sound:"none";
+  let soundOffsetSec=0,soundDurationSec=0;
+  if(sound!=="none"){
+   const o=d.soundOffsetSec,l=d.soundDurationSec;
+   if(src.audio?.editorialAccents===false||typeof o!=="number"||typeof l!=="number"||!Number.isFinite(o)||!Number.isFinite(l)||o<0||l<.05||o+l>duration+.0001){sound="none";repairs.push(id+":sound");}
+   else{soundOffsetSec=o;soundDurationSec=l;}
+  }
+  return {shotId:id,camera,transition,transitionSeconds,effect:effects.includes(d.effect)?d.effect:"keep",sound,soundOffsetSec,soundDurationSec,reason:typeof d.reason==="string"&&d.reason.trim()?d.reason.trim().slice(0,500):"Conserver le montage validé et sa synchronisation."};
+ });
+ if(rows.some(d=>!batch.shotIds.includes(d?.shotId)))repairs.push("foreign_shot_discarded");
+ return {raw:{sceneId:batch.sceneId,decisions,musicMood:raw?.sceneId===batch.sceneId&&moods.includes(raw.musicMood)?raw.musicMood:"keep",soundAndSubtitles:typeof raw?.soundAndSubtitles==="string"&&raw.soundAndSubtitles.trim()?raw.soundAndSubtitles.trim().slice(0,1000):"Conserver voix, musique et sous-titres existants."},repairs};
+}
 export function applySceneMontage(src:any,batch:any,raw:any){
  if(!raw||raw.sceneId!==batch.sceneId||!Array.isArray(raw.decisions)||raw.decisions.length!==batch.shotIds.length||!moods.includes(raw.musicMood)||typeof raw.soundAndSubtitles!=="string"||!raw.soundAndSubtitles.trim()||raw.soundAndSubtitles.length>1000)throw Error("Décisions de montage incomplètes.");
- let film=src;const changes:any[]=[];
- const apply=(name:string,args:any)=>{film=applyOperation(film,name,args).film;changes.push({name,args});};
+ let film=src;const changes:any[]=[];const skipped:any[]=[];
+ const apply=(name:string,args:any)=>{try{const next=applyOperation(film,name,args).film;film=next;changes.push({name,args});}catch(e){skipped.push({name,target:args.shot_id??args.at_shot_id??args.target??args.scene_id??null,error:e instanceof Error?e.message:String(e)});}};
  const scene=arr(src.scenes).find(s=>s.id===batch.sceneId);
  if(!scene)throw Error("Scène de montage introuvable.");
  for(let i=0;i<raw.decisions.length;i++){
@@ -53,5 +88,5 @@ export function applySceneMontage(src:any,batch:any,raw:any){
  }
  const music=film.audio?.proceduralMusic;
  if(raw.musicMood!=="keep"&&music?.enabled!==false&&!arr(music?.cues).some(c=>c.sceneId===scene.id))apply("set_scene_music",{scene_id:scene.id,mood:raw.musicMood,intensity:raw.musicMood==="silence"?0:.35});
- return {film,changes,decisions:raw.decisions.map((d:any)=>({shotId:d.shotId,camera:d.camera,transition:d.transition,effect:d.effect,sound:d.sound,reason:d.reason})),soundAndSubtitles:raw.soundAndSubtitles};
+ return {film,changes,skipped,decisions:raw.decisions.map((d:any)=>({shotId:d.shotId,camera:d.camera,transition:d.transition,effect:d.effect,sound:d.sound,reason:d.reason})),soundAndSubtitles:raw.soundAndSubtitles};
 }

@@ -8,7 +8,7 @@ import {finalDeliveryReview} from "./delivery_review.ts";
 import {FOUNDATION_POLICY,auditFoundations} from "./foundations.ts";
 import {DIRECTOR_POLICY,directorDiagnostics,makeDirectorBatches,directorKey,directorReviewState,reviewDirectorBatch,finalSoundDecision} from "./director_intelligence.ts";
 import { summarizeFilm, applyOperation, type Json } from "./film.ts";
-import {montageKey,chooseMontage,applySceneMontage} from "./montage.ts";
+import {montageKey,chooseMontage,applySceneMontage,normalizeMontage} from "./montage.ts";
 import { narrativePreflight,planNarrativeBeats,verifiedVisualEvidence,quotedFromNarration,motionSpecIssues } from "./narrative.ts";
 import { EDITORIAL_DIRECTION, editorialTimelineIssues } from "./editorial.ts";
 import { reviewNext } from "./cinematic.ts";
@@ -175,19 +175,22 @@ export async function productionTick(admin:any,serviceToken:string,system:string
    const key=await montageKey(batch);
    const matching=(edits??[]).filter((row:any)=>row.result?.key===key);
    if(matching.some((row:any)=>row.status==="done"))continue;
-   if(matching.filter((row:any)=>row.status==="failed").length>=2){await release("needs_review","montage_decision_invalid");return {status:"needs_review"};}
-   let chosen;
-   try{chosen=await chooseMontage(cfg,batch,m.goal,m.plan,creativeBrief,matching[0]?.result?.error??null);}
-   catch{await release(m.retry_count>=3?"needs_review":"queued","montage_model_unavailable",30);return {status:"retry"};}
+   // Optional artistic decisions cannot invalidate an already coherent cut.
+   let chosen:{raw:any;usage:{input:number;output:number}}={raw:null,usage:{input:0,output:0}};
+   let fallbackReason:string|null=null;
+   if(matching.filter((row:any)=>row.status==="failed").length>=2)fallbackReason="previous_montage_attempts_exhausted";
+   else try{chosen=await chooseMontage(cfg,batch,m.goal,m.plan,creativeBrief,matching[0]?.result?.error??null);}
+   catch{fallbackReason="montage_model_unavailable";}
    const step=await rpc(admin,"begin_production_step",{...lease,p_kind:"apply_scene_montage"});
    let result:any,ok=false;
    try{
-    const edited=applySceneMontage(film.data,batch,chosen.raw);
+    const normalized=normalizeMontage(film.data,batch,chosen.raw);
+    const edited=applySceneMontage(film.data,batch,normalized.raw);
     if(edited.changes.length){
      const {data:saved,error}=await admin.rpc("save_film_operation",{p_user_id:m.user_id,p_film_id:film.id,p_rev:film.rev,p_data:edited.film,p_op:{name:"apply_scene_montage",args:{sceneId:batch.sceneId,changes:edited.changes}}});
      if(error||!saved)throw Error("Conflit de modification du montage.");
     }
-    result={key,sceneId:batch.sceneId,shotIds:batch.shotIds,changes:edited.changes,decisions:edited.decisions,soundAndSubtitles:edited.soundAndSubtitles};ok=true;
+    result={key,sceneId:batch.sceneId,shotIds:batch.shotIds,changes:edited.changes,decisions:edited.decisions,soundAndSubtitles:edited.soundAndSubtitles,repairs:normalized.repairs,skipped:edited.skipped,fallbackReason};ok=true;
    }catch(e){result={key,error:e instanceof Error?e.message:String(e)};}
    await rpc(admin,"finish_production_step",{...lease,p_step:step,p_ok:ok,p_result:result,p_render:null});
    await admin.from("usage_events").insert({user_id:m.user_id,kind:"llm_tokens",provider:cfg.provider+":"+cfg.model,units:chosen.usage.input+chosen.usage.output,cost_usd:0});
