@@ -38,3 +38,35 @@ Deno.test("unreachable media is not a quota outage even in historical mixed erro
  assert(!mediaInputFailure(429,"Cannot fetch content from the provided URL."));
  assert(definitiveMediaChecks([{result:{error,transientProvider:true}}]).length===1);
 });
+
+import {candidateScore,rejectedMediaIds,mediaAttemptLimit} from "./structured.ts";
+Deno.test("named-entity candidate is prioritized over generic historic archive",()=>{
+ const old={result_id:"old",title:"Breeder and sportsman (1891)",author:"A",license:"CC BY",url:"https://example.org/old"};
+ const exact={...old,result_id:"exact",title:"OpenAI ChatGPT interface"};
+ assert(chooseCandidate([old,exact],new Set(),"image",4,"OpenAI ChatGPT")?.result_id==="exact");
+ assert(candidateScore(exact,"OpenAI ChatGPT")>candidateScore(old,"OpenAI ChatGPT"));
+});
+Deno.test("mission-wide definitive rejections are excluded; quotas are not",()=>{
+ const rows=[{kind:"structured_media_verify",status:"failed",result:{candidateId:"bad",reason:"not relevant"}},{kind:"structured_media_verify",status:"failed",result:{candidateId:"quota",transientProvider:true,error:"HTTP 429"}}];
+ const used=rejectedMediaIds(rows);assert(used.has("bad")&&!used.has("quota"));
+ assert(mediaAttemptLimit(true)===1&&mediaAttemptLimit(false)===2);
+});
+
+import {auditFoundations,proceduralFallbackReady} from "./foundations.ts";
+Deno.test("bounded procedural fallback preserves strict scene checks and rejects stale receipts",()=>{
+ let f=applyOperation(defaultFilm("Test"),"add_scene",{title:"Scene",narrativeGoal:"Test",durationSec:4}).film;
+ const id=f.scenes[0].id;f=applyOperation(f,"set_scene_narration",{scene_id:id,text:"Une idée précise est expliquée.",targetDurationSec:4}).film;
+ f=applyOperation(f,"add_code_shot",{scene_id:id,inSec:0,outSec:4,visualText:"Une idée précise est expliquée."}).film;
+ assert(!auditFoundations(f).passed);
+ f.info.mediaFallback={version:1,reason:"licensed_media_exhausted",shotIds:[f.scenes[0].shots[0].id]};
+ assert(proceduralFallbackReady(f));assert(auditFoundations(f).passed);
+ f.info.mediaFallback.shotIds=["stale"];assert(!proceduralFallbackReady(f));assert(!auditFoundations(f).passed);
+});
+
+import {allowProviderRetry} from "./structured.ts";
+Deno.test("optional visual quota outages cannot repeat forever",()=>{
+ assert(allowProviderRetry("structured_media_verify",0));
+ assert(!allowProviderRetry("structured_media_verify",1));
+ assert(!allowProviderRetry("structured_media_recovery_plan",1));
+ assert(allowProviderRetry("structured_voice_measure",3));
+});

@@ -109,7 +109,7 @@ async function wikimedia({ query, kind, limit }: Q): Promise<Raw[]> {
   };
   for (const [k, v] of Object.entries(p)) u.searchParams.set(k, v);
   const j = await getJson(u.toString());
-  return (j.query?.pages ?? []).filter((pg: any) => pg.imageinfo?.[0]).map((pg: any) => {
+  return [...(j.query?.pages ?? [])].sort((a:any,b:any)=>(a.index??9999)-(b.index??9999)).filter((pg: any) => pg.imageinfo?.[0]).map((pg: any) => {
     const ii = pg.imageinfo[0];
     const md = ii.extmetadata ?? {};
     const author = strip(md.Artist?.value) || NO_AUTHOR;
@@ -245,7 +245,7 @@ async function freesound({ query, kind, limit, keys }: Q): Promise<Raw[]> {
 
 // --- Poly Haven (sans clé) : modèles 3D CC0 ---
 async function polyhaven({ query, kind, limit }: Q): Promise<Raw[]> {
-  if (kind !== "model3d") return [];
+  if (kind !== "model3d" && kind !== "image") return [];
   const j = await getJson("https://api.polyhaven.com/assets?t=models");
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   const out: Raw[] = [];
@@ -253,12 +253,12 @@ async function polyhaven({ query, kind, limit }: Q): Promise<Raw[]> {
     const hay = `${a.name} ${(a.categories ?? []).join(" ")} ${(a.tags ?? []).join(" ")}`.toLowerCase();
     if (!terms.every((t) => hay.includes(t))) continue;
     out.push({
-      id: `polyhaven:${id}`, source: "polyhaven", kind, title: a.name,
+      id: kind==="image"?`polyhaven_preview:${id}`:`polyhaven:${id}`, source: kind==="image"?"polyhaven_preview":"polyhaven", kind, subtype:kind==="image"?"3d_preview":undefined,title: a.name,
       author: Object.keys(a.authors ?? {}).join(", ") || "Poly Haven",
       license: "CC0 1.0", license_url: "https://creativecommons.org/publicdomain/zero/1.0/",
       url: `https://polyhaven.com/a/${id}`,
       preview_url: `https://cdn.polyhaven.com/asset_img/thumbs/${id}.png?width=512`,
-      download_url: `https://api.polyhaven.com/files/${id}`,
+      download_url: kind==="image"?`https://cdn.polyhaven.com/asset_img/thumbs/${id}.png?width=512`:`https://api.polyhaven.com/files/${id}`,
     });
     if (out.length >= limit) break;
   }
@@ -274,7 +274,7 @@ const ADAPTERS: Record<string, { env?: string; kinds: string[]; fn: (q: Q) => Pr
   artic: { kinds: ["image","illustration"], fn: ({query,limit})=>artInstitute(query,limit) },
   smithsonian: { env:"SMITHSONIAN_API_KEY", kinds:["image","illustration"], fn:({query,limit,keys})=>smithsonianSearch(query,keys.SMITHSONIAN_API_KEY,limit) },
   archive: { kinds: ["image","video"], fn: ({query,kind,limit})=>archiveSearch(query,kind,limit) },
-  polyhaven: { kinds: ["model3d"], fn: polyhaven },
+  polyhaven: { kinds: ["model3d","image"], fn: polyhaven },
 };
 
 export const MEDIA_SEARCH_KINDS = ["image", "illustration", "vector", "video", "model3d", "news"];
@@ -300,7 +300,7 @@ export async function searchMedia(
   const braveWanted=(!p.sources?.length||p.sources.includes("brave"))&&p.kind!=="audio";
   if(braveWanted&&!keys.BRAVE_SEARCH_API_KEY) skipped.brave="clé BRAVE_SEARCH_API_KEY non configurée";
   const discovery = braveWanted && keys.BRAVE_SEARCH_API_KEY && safeMetadata(p.query)
-    ? discoverWeb(p.query,p.kind,keys.BRAVE_SEARCH_API_KEY,Math.min(limit,3)).catch((e)=>{errors.brave=/^HTTP \d{3}$/.test(String(e?.message))?String(e.message):"recherche indisponible";return [];})
+    ? discoverWeb(p.query,p.kind,keys.BRAVE_SEARCH_API_KEY,Math.min(limit,10)).catch((e)=>{errors.brave=/^HTTP \d{3}$/.test(String(e?.message))?String(e.message):"recherche indisponible";return [];})
     : Promise.resolve([]);
   const settled = await Promise.allSettled(active.map((s) => ADAPTERS[s].fn({ query: p.query, kind: p.kind, limit, keys })));
   const lists: MediaResult[][] = [];
