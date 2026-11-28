@@ -54,6 +54,9 @@ def _visual_evidence_valid(shot: dict, media: dict, narration: str) -> bool:
         return False
     if media.get("kind") not in {"image", "video"}:
         return False
+    extended=(media.get("provenance") or {}).get("source") in {"artic","archive","smithsonian","web","polyhaven_preview"}
+    if extended and (not re.fullmatch(r"[a-f0-9]{64}",str(audit.get("assetSha256",""))) or audit.get("contentSafetyChecked") is not True):
+        return False
     scores = audit.get("samples")
     needed = 3 if media.get("kind") == "video" else 1
     if not isinstance(scores, list) or len(scores) < needed or len(scores) > 4:
@@ -66,6 +69,8 @@ def _visual_evidence_valid(shot: dict, media: dict, narration: str) -> bool:
                 or not _finite_score(sample.get("visualQuality"), MIN_QUALITY)
                 or not _clean(sample.get("description"))
                 or sample.get("hasContradiction") is not False):
+            return False
+        if extended and sample.get("contentSafe") is not True:
             return False
         if media.get("kind") == "video":
             at = sample.get("atSec")

@@ -111,6 +111,8 @@ export function rejectedMediaIds(rows:{kind?:string;status?:string;result?:any}[
  return new Set(rows.filter(x=>x.kind==="structured_media_verify"&&x.status==="failed"&&!transientFailure(x)&&typeof x.result?.candidateId==="string").map(x=>x.result.candidateId));
 }
 export function mediaAttemptLimit(hasReal:boolean){return hasReal?1:2;}
+export function optionalVisualProvider(kind:string){return ["structured_visual_plan","structured_media_verify","structured_media_batch_search","structured_media_search","structured_media_recovery_plan"].includes(kind);}
+export function allowProviderRetry(kind:string,prior:number){return !optionalVisualProvider(kind)||prior<1;}
 
 const durationOk=(n:number,target:number)=>Number.isFinite(n)&&n>0&&Math.abs(n-target)<=Math.max(2,target*.05);
 const keyOf=(x:any)=>directorKey(x,0,0);
@@ -129,7 +131,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
   if(remaining>0){await release("queued","provider_backoff",Math.min(900,remaining));return {status:"queued",phase:"provider_backoff"};}
   const consecutive=history.slice().reverse().findIndex(h=>!transientFailure(h));
   const n=consecutive<0?history.length:consecutive;
-  if(n>=6){await release("needs_review","provider_retry_exhausted");return {status:"needs_review",reason:"provider_retry_exhausted"};}
+  if(n>=6&&!optionalVisualProvider(lastProvider.kind)){await release("needs_review","provider_retry_exhausted");return {status:"needs_review",reason:"provider_retry_exhausted"};}
  }
  const block=async(code:string)=>{await release("needs_review",code);return {status:"needs_review",reason:code};};
  const step=async(kind:string,key:string,fn:()=>Promise<any>,extra:any={})=>{
@@ -137,7 +139,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
   let result:any,ok=true;
   try{ctx.cfg.deadlineAt=Date.now()+75000;result=await fn();if(result?.ok===false)ok=false;}
   catch(e){ok=false;result={error:e instanceof Error?e.message.slice(0,700):String(e).slice(0,700)};}
-  if(!ok&&!isMediaInputFailure(result?.error)&&/provider_(?:rate_limited|cooldown|temporarily_unavailable)|HTTP 429/i.test(String(result?.error??""))){const n=entries(kind,key).filter(h=>h.result?.transientProvider).length;result={...result,transientProvider:true,retryAt:Date.now()+Math.min(900,60*Math.pow(2,n))*1000};}
+  if(!ok&&!isMediaInputFailure(result?.error)&&/provider_(?:rate_limited|cooldown|temporarily_unavailable)|HTTP 429/i.test(String(result?.error??""))){const n=entries(kind,key).filter(h=>h.result?.transientProvider).length;if(allowProviderRetry(kind,n))result={...result,transientProvider:true,retryAt:Date.now()+Math.min(900,60*Math.pow(2,n))*1000};else result={...result,optionalProviderExhausted:true};}
   const {error:finish}=await admin.rpc("finish_production_step",{...lease,p_step:n,p_ok:ok,p_result:{...result,...extra,key},p_render:null});if(finish)throw Error(finish.message);
   return {status:"advanced",phase:kind,ok};
  };
@@ -285,7 +287,8 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
    return step("structured_media_fallback",slotKey,async()=>{
     const args:any={shot_id:sh.id,visualText:target.quote,cardStyle:target.originalStyle??"focus"};
     if(target.originalSpec){args.visualType=target.originalSpec.type;args.visualItems=arr(target.originalSpec.items).map(x=>x.text);}
-    const result=await runTool("turn_shot_into_code",args);
+    let result=await runTool("turn_shot_into_code",args);
+    if(result.ok===false&&target.originalSpec)result=await runTool("turn_shot_into_code",{shot_id:sh.id,visualText:target.quote,cardStyle:"focus"});
     return {...result,reason:"bounded_media_candidates_exhausted"};
    });
  };
@@ -301,7 +304,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
    });
   }
   if(!plan){
-   if(count("structured_visual_plan",layoutKey)>=3)return block("visual_direction_unavailable");
+   if(count("structured_visual_plan",layoutKey)>=2)return step("structured_visual_plan",layoutKey,async()=>({sceneId:scene.id,targets:[],fallback:"existing_valid_procedural_layout"}));
    return step("structured_visual_plan",layoutKey,async()=>{
     const codeShots=ordered(scene.shots).filter(sh=>sh.visualMode==="programmatic");
     if(!codeShots.length)return {sceneId:scene.id,targets:[]};

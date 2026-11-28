@@ -44,7 +44,8 @@ export async function discoverWeb(query:string,kind:string,key:string,limit:numb
  page.searchParams.set("q",query+" Creative Commons");
  page.searchParams.set("safesearch","strict");page.searchParams.set("count",String(Math.min(10,limit)));
  const results=await Promise.allSettled([primary,json(page,{"X-Subscription-Token":key}).then(raw=>webReferences(raw.web,kind))]);
- const merged=results.flatMap(r=>r.status==="fulfilled"?r.value:[]);
+ const lists=results.map(r=>r.status==="fulfilled"?r.value:[]);
+ const merged:WebReference[]=[];for(let i=0;i<limit;i++)for(const list of lists)if(list[i])merged.push(list[i]);
  return [...new Map(merged.map(r=>[r.url,r])).values()].slice(0,limit*2);
 }
 // Official museum API: only asset records explicitly marked public domain.

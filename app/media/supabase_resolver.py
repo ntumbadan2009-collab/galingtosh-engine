@@ -20,7 +20,9 @@ EXTENSIONS = {"image/jpeg":".jpg","image/png":".png","image/webp":".webp","image
  "audio/mpeg":".mp3","audio/mp4":".m4a","audio/wav":".wav","audio/x-wav":".wav","audio/ogg":".ogg","audio/aac":".aac","audio/flac":".flac"}
 
 def _media_ids(film:dict[str,Any])->list[str]:
- return [str(m["id"]) for m in film.get("media",[]) if isinstance(m,dict) and m.get("id")]
+ used={str(s["mediaRef"]) for scene in film.get("scenes",[]) for s in scene.get("shots",[]) if s.get("mediaRef")}
+ used.update(str(t["mediaRef"]) for t in (film.get("audio") or {}).get("tracks",[]) if t.get("mediaRef") and not t.get("disabled"))
+ return [str(m["id"]) for m in film.get("media",[]) if isinstance(m,dict) and m.get("id") and str(m["id"]) in used]
 
 def _credit(row:dict)->dict:
  p=row.get("provenance") or {}
@@ -31,12 +33,15 @@ def _credit(row:dict)->dict:
  "restrictions":p.get("restrictions") or []}
 
 async def resolve_film_media(film:dict[str,Any],project_id:str,user_id:str,db:SupabaseREST,workdir:Path):
- rows=await db.read_media_assets(project_id,_media_ids(film))
+ needed=set(_media_ids(film))
+ rows=await db.read_media_assets(project_id,list(needed)) if needed else []
  by_id={str(row.get("id")):row for row in rows}
  files={}; warnings=[]; credits=[]
  for index,item in enumerate(film.get("media",[])):
   if not isinstance(item,dict) or not item.get("id"): continue
-  mid=str(item["id"]); row=by_id.get(mid)
+  mid=str(item["id"])
+  if mid not in needed: continue
+  row=by_id.get(mid)
   if not row or str(row.get("user_id"))!=user_id: warnings.append(f"Média {mid} absent ou hors périmètre : ignoré."); continue
   checked_sound=any(t.get("soundEvidence") and t.get("mediaRef")==mid for t in (film.get("audio") or {}).get("tracks",[]) if isinstance(t,dict))
   if checked_sound and not licensed_public_sound(row):warnings.append(f"Licence sonore de {mid} non conforme.");continue

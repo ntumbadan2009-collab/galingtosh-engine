@@ -62,3 +62,11 @@ Deno.test("bounded procedural fallback preserves strict scene checks and rejects
  assert(proceduralFallbackReady(f));assert(auditFoundations(f).passed);
  f.info.mediaFallback.shotIds=["stale"];assert(!proceduralFallbackReady(f));assert(!auditFoundations(f).passed);
 });
+
+import {allowProviderRetry} from "./structured.ts";
+Deno.test("optional visual quota outages cannot repeat forever",()=>{
+ assert(allowProviderRetry("structured_media_verify",0));
+ assert(!allowProviderRetry("structured_media_verify",1));
+ assert(!allowProviderRetry("structured_media_recovery_plan",1));
+ assert(allowProviderRetry("structured_voice_measure",3));
+});

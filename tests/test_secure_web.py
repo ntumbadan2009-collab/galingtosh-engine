@@ -43,3 +43,8 @@ def test_web_license_is_asset_specific_and_same_origin():
     assert not extract_candidates(page({**data,"contentUrl":"https://other.example/media.jpg"}),"https://example.org/story","image")
     assert not extract_candidates(page({"@type":"Article","license":data["license"],"image":{k:v for k,v in data.items() if k!="license"}}),"https://example.org/story","image")
     assert not extract_candidates(page({"@type":"ImageObject","name":"image","contentUrl":"https://example.org/a.jpg"}),"https://example.org/story","image")
+
+def test_unused_rejected_media_are_not_downloaded():
+    from app.media.supabase_resolver import _media_ids
+    film={"media":[{"id":"rejected"},{"id":"used"},{"id":"music"}],"scenes":[{"shots":[{"mediaRef":"used"}]}],"audio":{"tracks":[{"mediaRef":"music"}]}}
+    assert set(_media_ids(film))=={"used","music"}
