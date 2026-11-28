@@ -172,14 +172,15 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
  if(issues.length){
   const scene=scenes.find(s=>issues.some(x=>x.startsWith("Scène "+s.id+" :")));
   if(!scene)return block("research_scope_missing");
-  const key=scene.id;
-  if(count("structured_research",key)>=3)return block("documentary_evidence_insufficient");
+  // A validator revision may retry previously rejected research without deleting its history.
+  const key=scene.id+":research-v2";
+  if(count("structured_research",key)>=6)return block("documentary_evidence_insufficient");
   const attempt=count("structured_research",key),qkey=key+":"+attempt;
   const q=done("structured_research_query",qkey);
   if(!q){
    if(count("structured_research_query",qkey)>=2)return block("research_query_failed");
    return step("structured_research_query",qkey,async()=>{
-    const raw=await call("submit_queries",{query:S,englishQuery:S,alternateQuery:S},"Prépare trois requêtes documentaires courtes et ciblées sur les affirmations. La première dans la langue du récit, les deux autres en anglais, avec nom scientifique et termes d'articles scientifiques si utiles. Les deux requêtes anglaises doivent viser des travaux différents. Commence par une recherche large du sujet et de son mécanisme (2 à 5 mots), sans présupposer un chiffre exact; l’autre requête peut être plus précise. Réponds uniquement avec les requêtes.",{scene:scene.title,narration:scene.narration.text,goal:m.goal,previous:entries("structured_research",key).map(x=>x.result.error)});
+    const raw=await call("submit_queries",{query:S,englishQuery:S,alternateQuery:S},"Prépare trois requêtes documentaires courtes et ciblées sur les affirmations. La première dans la langue du récit, les deux autres en anglais, avec nom scientifique et termes d'articles scientifiques si utiles. Les deux requêtes anglaises doivent viser des travaux différents, avec des noms propres et des termes bibliographiques concrets. Si une erreur indique des identifiants de passages invalides, ne multiplie pas les détails du fait initial; simplifie le sujet. Commence par une recherche large du sujet et de son mécanisme (2 à 5 mots), sans présupposer un chiffre exact; l’autre requête peut être plus précise. Réponds uniquement avec les requêtes.",{scene:scene.title,narration:scene.narration.text,goal:m.goal,previous:history.filter(x=>x.kind==="structured_research"&&(x.result?.key===scene.id||x.result?.key===key)).map(x=>x.result.error).filter(Boolean).slice(-6)});
     for(const k of ["query","englishQuery","alternateQuery"])if(typeof raw[k]!=="string"||!raw[k].trim()||raw[k].length>180)throw Error("invalid_research_query");
     return raw;
    });

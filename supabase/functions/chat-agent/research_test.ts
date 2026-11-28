@@ -14,3 +14,27 @@ Deno.test("actual source quotations, two sources and stale narration",()=>{
  let refused=false;try{validateResearch(narration,sources,raw)}catch{refused=true}
  if(!refused)throw Error("invented quotation accepted");
 });
+
+import {indexEvidence,materializeEvidence,selectEvidence,rankSources} from "./research.ts";
+Deno.test("compact passage catalogue and harmless ID formatting keep exact evidence",()=>{
+ const sources:any[]=[
+ {id:"a",title:"AI technical report",url:"https://example.org/a",organization:"A",workKey:"a",excerpt:"The system was released. ".repeat(180),kind:"publication"},
+ {id:"b",title:"AI review",url:"https://example.org/b",organization:"B",workKey:"b",excerpt:"The system was released. ".repeat(180),kind:"encyclopedia"}];
+ const ordered=rankSources(sources,"AI system released"),p=selectEvidence(ordered,"system released");
+ if(p.length>12||p.length<2)throw Error("passage budget");
+ const first=p.find(x=>x.sourceId==="a")!,second=p.find(x=>x.sourceId==="b")!;
+ const raw={reason:"Two sources",sentences:[{text:"Le système a été publié.",evidenceIds:[" "+first.id.toUpperCase()+" ",second.id]}]};
+ const result=materializeEvidence(ordered,p,raw);
+ if(result.review.claims[0].citations.length!==2)throw Error("missing citations");
+ raw.sentences[0].evidenceIds=[first.id,"p999_0"];
+ let rejected=false;try{materializeEvidence(ordered,p,raw)}catch{rejected=true}
+ if(!rejected)throw Error("invented ID accepted");
+});
+Deno.test("two publications from the same organization are not independent evidence",()=>{
+ const sources:any[]=[
+ {id:"a",title:"A",url:"https://example.org/a",organization:"Same",workKey:"a",excerpt:"The system was released in the experiment.",kind:"publication"},
+ {id:"b",title:"B",url:"https://example.org/b",organization:"Same",workKey:"b",excerpt:"The system was released in the experiment.",kind:"publication"}];
+ const p=indexEvidence(sources);
+ let rejected=false;try{materializeEvidence(sources,p,{reason:"Test",sentences:[{text:"Le système a été publié.",evidenceIds:[p[0].id,p[1].id]}]})}catch{rejected=true}
+ if(!rejected)throw Error("same organization accepted");
+});
