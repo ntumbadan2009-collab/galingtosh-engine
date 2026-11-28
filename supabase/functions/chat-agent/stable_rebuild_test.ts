@@ -70,3 +70,25 @@ Deno.test("optional visual quota outages cannot repeat forever",()=>{
  assert(!allowProviderRetry("structured_media_recovery_plan",1));
  assert(allowProviderRetry("structured_voice_measure",3));
 });
+
+import {normalizeMontage,applySceneMontage} from "./montage.ts";
+import {makeDirectorBatches} from "./director_intelligence.ts";
+Deno.test("montage repairs incompatible procedural camera, missing shots and invalid accents",()=>{
+ let f=applyOperation(defaultFilm("Test"),"add_scene",{title:"A",narrativeGoal:"A",durationSec:8}).film;
+ const id=f.scenes[0].id;f=applyOperation(f,"set_scene_narration",{scene_id:id,text:"Une idée claire. Une autre idée précise.",targetDurationSec:8}).film;
+ f=applyOperation(f,"add_code_shot",{scene_id:id,inSec:0,outSec:4,visualText:"Une idée claire."}).film;
+ f=applyOperation(f,"add_code_shot",{scene_id:id,inSec:4,outSec:8,visualText:"Une autre idée précise."}).film;
+ const b=makeDirectorBatches(f)[0];
+ const normalized=normalizeMontage(f,b,{sceneId:id,decisions:[{shotId:b.shotIds[0],camera:"dolly",effect:"fade_in",transition:"fade",transitionSeconds:99,sound:"whoosh",soundOffsetSec:9,soundDurationSec:1,reason:"test"},{shotId:"foreign"}]});
+ assert(normalized.raw.decisions[0].camera==="keep");
+ assert(normalized.raw.decisions[0].sound==="none");
+ assert(normalized.raw.decisions[0].transitionSeconds<=1.2);
+ assert(normalized.raw.decisions[1].camera==="keep");
+ const result=applySceneMontage(f,b,normalized.raw);
+ assert(result.film.scenes[0].shots.length===2);
+ assert(result.changes.some(x=>x.name==="add_effect"));
+ assert(JSON.stringify(result.film.scenes[0].narration)===JSON.stringify(f.scenes[0].narration));
+ const fallback=applySceneMontage(f,b,normalizeMontage(f,b,null).raw);
+ assert(fallback.changes.length===0);
+ reject(()=>normalizeMontage(f,{...b,shotIds:["foreign"]},null));
+});
