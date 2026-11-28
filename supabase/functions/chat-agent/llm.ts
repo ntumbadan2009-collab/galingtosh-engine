@@ -74,6 +74,10 @@ class HttpError extends Error {
   }
 }
 
+// Asset-specific HTTP 400 errors cannot be repaired by switching models.
+export function mediaInputFailure(status:number,body:string):boolean {
+ return status===400&&/cannot fetch content from the provided url|failed to fetch (?:the )?(?:image|url)|invalid image (?:url|data)|unsupported image (?:format|mime)|image.*(?:could not be downloaded|not accessible)/i.test(body);
+}
 // --- Rotation cyclique Gemini -------------------------------------------------------------
 // Deux niveaux : le « groupe principal » (modèles légers et rapides) tourne en cycle, une requête après l'autre ;
 // la « réserve » (plus lente, plus lourde ou en préversion) n'est utilisée que si tout le groupe principal est indisponible.
@@ -182,6 +186,7 @@ async function openaiChat(cfg: LlmCfg, payload: Json): Promise<any> {
       cfg.model = model; // journalisation d'usage : modèle réellement utilisé
       return j;
     } catch (e) {
+      if(e instanceof HttpError&&mediaInputFailure(e.status,e.body))throw Error("media_input_unavailable: provider cannot decode or fetch image");
       if(e instanceof HttpError&&e.status===429)rateLimited++;
       else if((e instanceof HttpError&&e.status>=500)||/timeout|timed out|abort/i.test(String(e)))temporary++;
       const cd = cooldownFor(e);

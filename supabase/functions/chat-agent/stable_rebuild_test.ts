@@ -26,3 +26,15 @@ Deno.test("candidate selection cannot repeat rejected media",()=>{
 });
 
 Deno.test("provider outage is not a visual rejection",()=>{const rows=[{result:{candidateId:"a",transientProvider:true}},{result:{candidateId:"b",verified:false}}];const definitive=definitiveMediaChecks(rows);assert(definitive.length===1&&definitive[0].result.candidateId==="b");});
+
+import {isMediaInputFailure,transientFailure} from "./structured.ts";
+import {mediaInputFailure} from "./llm.ts";
+Deno.test("unreachable media is not a quota outage even in historical mixed errors",()=>{
+ const error="provider_rate_limited: HTTP 400 Cannot fetch content from the provided URL. HTTP 429";
+ assert(isMediaInputFailure(error));
+ assert(!transientFailure({kind:"structured_media_verify",result:{error,transientProvider:true}}));
+ assert(transientFailure({kind:"structured_media_verify",result:{error:"provider_rate_limited: HTTP 429",transientProvider:true}}));
+ assert(mediaInputFailure(400,"Cannot fetch content from the provided URL."));
+ assert(!mediaInputFailure(429,"Cannot fetch content from the provided URL."));
+ assert(definitiveMediaChecks([{result:{error,transientProvider:true}}]).length===1);
+});

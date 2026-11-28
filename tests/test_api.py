@@ -31,3 +31,8 @@ def test_media_probe_requires_engine_secret(monkeypatch):
                            json={"project_id":"p1","media_id":"m1","user_id":"u1"})
     assert response.status_code == 503
     get_settings.cache_clear()
+
+def test_inline_image_evidence_requires_storage_and_authorization():
+    client = TestClient(app)
+    response = client.post("/media/image-evidence", json={"project_id":"p1","media_id":"m1","user_id":"u1"})
+    assert response.status_code in (401,503)

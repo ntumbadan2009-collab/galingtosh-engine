@@ -478,20 +478,15 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
         if(web&&!extendedEnabled())throw Error("Extension Web en quarantaine.");
         const sourceInSec=Number(shot.sourceInSec??0);
         if(row.kind==="image"){
-          let imageUrl:string|null=null;
-          if(row.source==="upload"){
-            const storagePath=String(row.storage_path??"");
-            if(storagePath.split("/")[0]!==ctx.userId)throw Error("Chemin d'image privé invalide.");
-            const {data}=await ctx.admin.storage.from("user-uploads").createSignedUrl(storagePath,600);
-            imageUrl=data?.signedUrl??null;
-          }else if(web){
-            const engine=(Deno.env.get("RENDER_ENGINE_URL")??"https://galingtosh-engine.onrender.com").replace(/\/$/,"");
-            const response=await fetch(engine+"/media/secure-image-evidence",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ctx.authToken,...(ctx.productionMissionId?{"X-Production-Mission":ctx.productionMissionId}:{})},body:JSON.stringify({project_id:ctx.projectId,user_id:ctx.userId,media_id:row.id}),signal:AbortSignal.timeout(35000)});
-            if(!response.ok)throw Error("Image Web refusée par le moteur.");
-            const data=await response.json();if(!/^[a-f0-9]{64}$/.test(data.sha256??"")||typeof data.jpegBase64!=="string"||data.jpegBase64.length>150000)throw Error("Preuve image Web invalide.");
-            assetSha256=data.sha256;imageUrl="data:image/jpeg;base64,"+data.jpegBase64;
-          }else imageUrl=provenance.download_url??provenance.preview_url??null;
-          if(!imageUrl)throw Error("Image non accessible pour contrôle visuel.");
+          const engine=(Deno.env.get("RENDER_ENGINE_URL")??"https://galingtosh-engine.onrender.com").replace(/\/$/,"");
+          const response=await fetch(engine+"/media/image-evidence",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ctx.authToken,...(ctx.productionMissionId?{"X-Production-Mission":ctx.productionMissionId}:{})},body:JSON.stringify({project_id:ctx.projectId,user_id:ctx.userId,media_id:row.id}),signal:AbortSignal.timeout(35000)});
+          if(response.status>=500||response.status===429)throw Error("provider_temporarily_unavailable: image evidence engine");
+          if(response.status===401||response.status===403)throw Error("image_evidence_authorization_failed");
+          if(!response.ok)throw Error("media_input_unavailable: image evidence refused");
+          const data=await response.json();
+          if(!/^[a-f0-9]{64}$/.test(data.sha256??"")||typeof data.jpegBase64!=="string"||!data.jpegBase64.length||data.jpegBase64.length>150000||!/^[A-Za-z0-9+/=]+$/.test(data.jpegBase64))throw Error("media_input_unavailable: invalid image evidence");
+          assetSha256=data.sha256;
+          const imageUrl="data:image/jpeg;base64,"+data.jpegBase64;
           samples=[await review(imageUrl)];
         }else{
           const duration=Number(shot.outSec)-Number(shot.inSec??0);
@@ -538,7 +533,7 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           verifiedBy:"vision_observation_v1",actualVisualAnalysis:true,
           mediaRef:row.id,narrationQuote:quote,visualIntent,hasContradiction:false,
           licenseChecked:row.source==="upload"||!unknownRights,
-          sourceInSec, samples,...(web?{assetSha256,contentSafetyChecked:true}:{}),
+          sourceInSec, samples,...(assetSha256?{assetSha256,contentSafetyChecked:true}:{}),
         };
         const saved=await mutateFilm(ctx,"record_visual_verification",{shot_id:shot.id,evidence});
         return {output:{...saved,verified:true,shot_id:shot.id,

@@ -80,6 +80,10 @@ async def resolve_film_media(film:dict[str,Any],project_id:str,user_id:str,db:Su
      _,mime=await download_public_media(str(url),target,MAX_SOUND_BYTES if checked_sound else MAX_MEDIA_BYTES)
    else:
     warnings.append(f"Source « {source} » du média {mid} non prise en charge."); continue
+   if kind=="image":
+    expected={str((shot.get("visualEvidence") or {}).get("assetSha256")) for scene in film.get("scenes",[]) for shot in scene.get("shots",[]) if shot.get("mediaRef")==mid and (shot.get("visualEvidence") or {}).get("assetSha256")}
+    if expected and expected!={await asyncio.to_thread(digest,target)}:
+     raise SupabaseError("Le fichier image a changé depuis son contrôle visuel.")
    if mime not in ALLOWED_MIME[kind]: raise SupabaseError("Type MIME incompatible.")
    if kind=="svg" or mime=="image/svg+xml":
     final=target.with_suffix(".png"); sanitize_svg_to_png(target,final); target.unlink(missing_ok=True)
