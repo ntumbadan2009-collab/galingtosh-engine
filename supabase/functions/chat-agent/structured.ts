@@ -82,7 +82,15 @@ export function repairSceneLayout(src:Json,sceneId:string){
  changes.push({name:"order_repaired_shots",args:{scene_id:sceneId,shot_ids:sequence}});
  return {film,changes};
 }
-export function definitiveMediaChecks<T extends {result?:any}>(rows:T[]):T[]{return rows.filter(x=>!x.result?.transientProvider);}
+export function isMediaInputFailure(error:unknown):boolean{
+ return /media_input_unavailable|cannot fetch content from the provided url|failed to fetch (?:the )?(?:image|url)|invalid image (?:url|data)|unsupported image (?:format|mime)/i.test(String(error??""));
+}
+// Old ledgers mislabeled deterministic media errors as provider quota failures.
+// Keep those rows for audit, but never let them trigger a global provider block.
+export function transientFailure(row:{kind?:string;result?:any}):boolean{
+ return !!row.result?.transientProvider&&!(row.kind==="structured_media_verify"&&isMediaInputFailure(row.result?.error));
+}
+export function definitiveMediaChecks<T extends {kind?:string;result?:any}>(rows:T[]):T[]{return rows.filter(x=>!x.result?.transientProvider||isMediaInputFailure(x.result?.error));}
 export function chooseCandidate(results:any[],used:Set<string>,kind:string,seconds:number){
  return arr(results).find(x=>typeof x.result_id==="string"&&!used.has(x.result_id)&&x.license&&x.author&&x.url&&!/unknown|inconnue|non renseignée/i.test(String(x.license))&&(kind!=="video"||x.duration==null||Number(x.duration)>=seconds));
 }
@@ -96,12 +104,12 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
  const entries=(kind:string,key:string)=>history.filter(h=>h.kind===kind&&h.result?.key===key);
  const done=(kind:string,key:string)=>entries(kind,key).find(h=>h.status==="done");
  const count=(kind:string,key:string)=>entries(kind,key).filter(h=>!h.result?.transientProvider).length;
- const providerFailures=history.filter(h=>h.result?.transientProvider);
+ const providerFailures=history.filter(transientFailure);
  const lastProvider=providerFailures.at(-1);
  if(lastProvider&&lastProvider.step_no===history.at(-1)?.step_no){
   const remaining=Math.ceil((Number(lastProvider.result.retryAt)-Date.now())/1000);
   if(remaining>0){await release("queued","provider_backoff",Math.min(900,remaining));return {status:"queued",phase:"provider_backoff"};}
-  const consecutive=history.slice().reverse().findIndex(h=>!h.result?.transientProvider);
+  const consecutive=history.slice().reverse().findIndex(h=>!transientFailure(h));
   const n=consecutive<0?history.length:consecutive;
   if(n>=6){await release("needs_review","provider_retry_exhausted");return {status:"needs_review",reason:"provider_retry_exhausted"};}
  }
@@ -111,7 +119,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
   let result:any,ok=true;
   try{ctx.cfg.deadlineAt=Date.now()+75000;result=await fn();if(result?.ok===false)ok=false;}
   catch(e){ok=false;result={error:e instanceof Error?e.message.slice(0,700):String(e).slice(0,700)};}
-  if(!ok&&/provider_(?:rate_limited|cooldown|temporarily_unavailable)|HTTP 429/i.test(String(result?.error??""))){const n=entries(kind,key).filter(h=>h.result?.transientProvider).length;result={...result,transientProvider:true,retryAt:Date.now()+Math.min(900,60*Math.pow(2,n))*1000};}
+  if(!ok&&!isMediaInputFailure(result?.error)&&/provider_(?:rate_limited|cooldown|temporarily_unavailable)|HTTP 429/i.test(String(result?.error??""))){const n=entries(kind,key).filter(h=>h.result?.transientProvider).length;result={...result,transientProvider:true,retryAt:Date.now()+Math.min(900,60*Math.pow(2,n))*1000};}
   const {error:finish}=await admin.rpc("finish_production_step",{...lease,p_step:n,p_ok:ok,p_result:{...result,...extra,key},p_render:null});if(finish)throw Error(finish.message);
   return {status:"advanced",phase:kind,ok};
  };
@@ -261,7 +269,9 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
    const slotKey=layoutKey+":"+sh.id;
    if(done("structured_media_fallback",slotKey))continue;
    const attempts=entries("structured_media_attach",slotKey);
-   const verified=definitiveMediaChecks(entries("structured_media_verify",slotKey));
+   const verified=definitiveMediaChecks(entries("structured_media_verify",slotKey)).filter(x=>!x.result?.transientProvider);
+// A legacy URL failure may be retried once through the new inline-byte path.
+// A fresh definitive failure must immediately select a different asset.
    const last=attempts.at(-1);
    if(last?.status==="done"&&sh.mediaRef===last.result.media_asset_id&&!verified.some(x=>x.result.candidateId===last.result.candidateId)){
     return step("structured_media_verify",slotKey,()=>runTool("verify_shot_media",{shot_id:sh.id,narrationQuote:target.quote,visualIntent:target.intent}),{candidateId:last.result.candidateId});

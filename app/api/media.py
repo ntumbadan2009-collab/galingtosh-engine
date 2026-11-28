@@ -4,6 +4,7 @@ import base64
 import asyncio
 import tempfile
 from pathlib import Path
+from PIL import Image
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -218,6 +219,7 @@ async def audio_evidence(request:Request,payload:AudioEvidenceRequest)->dict[str
         raise HTTPException(status_code=422,detail="Extrait audio réel non exploitable.") from None
     finally:shutil.rmtree(directory,ignore_errors=True)
 
+@user_router.post("/image-evidence")
 @user_router.post("/secure-image-evidence")
 async def secure_image_evidence(request:Request,payload:ProbeRequest)->dict[str,Any]:
     db=getattr(request.app.state,"supabase",None)
@@ -227,13 +229,25 @@ async def secure_image_evidence(request:Request,payload:ProbeRequest)->dict[str,
     uid=await (db.production_user_id(token,mission) if mission else db.authenticated_user_id(token))
     if not uid or uid!=payload.user_id:raise HTTPException(status_code=401,detail="Session invalide.")
     rows=await db.read_media_assets(payload.project_id,[payload.media_id])
-    if not rows or rows[0].get("user_id")!=uid or rows[0].get("kind")!="image" or not is_extended(rows[0]):
+    if not rows or rows[0].get("user_id")!=uid or rows[0].get("kind")!="image":
         raise HTTPException(status_code=404,detail="Image Web introuvable.")
     with tempfile.TemporaryDirectory(prefix="gt-secure-image-") as work:
         source=Path(work)/"raw"; thumb=Path(work)/"proof.jpg"
         try:
-            await download_extended(rows[0],source)
+            row=rows[0]
+            if is_extended(row):
+                await download_extended(row,source)
+            elif row.get("source")=="upload":
+                await db.download_user_upload(str(row.get("storage_path") or ""),uid,source,12*1024*1024)
+            elif row.get("source")=="search":
+                p=row.get("provenance") or {}
+                url=p.get("download_url") or p.get("preview_url")
+                if not url or not p.get("license") or not p.get("author") or not p.get("url"):
+                    raise ValueError("Provenance incomplète.")
+                await download_public_media(str(url),source,12*1024*1024)
+            else:
+                raise ValueError("Source non prise en charge.")
             await asyncio.to_thread(clean_image,source,thumb,480)
             return {"sha256":await asyncio.to_thread(digest,source),"jpegBase64":base64.b64encode(thumb.read_bytes()).decode("ascii")}
-        except (OSError,ValueError,FFmpegError):
-            raise HTTPException(status_code=422,detail="Image Web refusée.") from None
+        except (OSError,ValueError,FFmpegError,Image.DecompressionBombError,Image.DecompressionBombWarning):
+            raise HTTPException(status_code=422,detail="Image inaccessible ou format non autorisé.") from None
