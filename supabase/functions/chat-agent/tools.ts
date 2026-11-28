@@ -243,6 +243,22 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
       if (!MEDIA_SEARCH_KINDS.includes(args.kind)) throw new Error(`kind invalide. Valeurs : ${MEDIA_SEARCH_KINDS.join(", ")}`);
       const sources = Array.isArray(args.sources) ? args.sources.filter((s: any) => MEDIA_SOURCES.includes(s)) : undefined;
       const r = await searchMedia({ query, kind: args.kind, limit: Number(args.limit) || 8, sources }, await loadMediaKeys(ctx.admin));
+      // Search engine links are discovery only. Resolve a few page-level
+      // candidates using the authenticated engine, which checks media-specific rights.
+      if(ctx.productionMissionId&&extendedEnabled()&&["image","video"].includes(args.kind)){
+        const pages=r.web_references.filter(x=>x.source==="brave").map(x=>x.url).filter((u,i,a)=>a.indexOf(u)===i).slice(0,3);
+        if(pages.length){
+          try{
+            const engine=(Deno.env.get("RENDER_ENGINE_URL")??"https://galingtosh-engine.onrender.com").replace(/\/$/,"");
+            const resp=await fetch(engine+"/media/licensed-web-candidates",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ctx.authToken,"X-Production-Mission":ctx.productionMissionId},body:JSON.stringify({user_id:ctx.userId,urls:pages,kind:args.kind}),signal:AbortSignal.timeout(14000)});
+            if(resp.ok){
+              const parsed=await resp.json();
+              const eligible=(Array.isArray(parsed.results)?parsed.results:[]).filter((x:any)=>x.source==="web"&&x.kind===args.kind&&typeof x.id==="string"&&publicLicense(x.license_url)&&httpsUrl(x.url)&&httpsUrl(x.download_url)&&safeMetadata(x.title,x.author,x.url,x.download_url));
+              r.results.push(...eligible.slice(0,6));
+            }
+          }catch{/* Web discovery is optional; normal providers remain usable. */}
+        }
+      }
       const compact = r.results.map((x) => ({
         result_id: x.id, title: x.title, author: x.author, license: x.license, restrictions: x.restrictions,
         source: x.source, url: x.url, width: x.width, height: x.height, duration: x.duration,
@@ -447,9 +463,11 @@ export async function execTool(ctx: Ctx, name: string, args: Json): Promise<Tool
           "Tu es contrôleur audiovisuel EXTRÊMEMENT STRICT. Observe UNIQUEMENT l'image réellement fournie. " +
           "Citation du scénario : " + JSON.stringify(quote) + ". " +
           "Intention visuelle demandée : " + JSON.stringify(visualIntent) + ". " +
-          "La pertinence mesure ce que l'image ILLUSTRE DIRECTEMENT de la CITATION, pas la similitude de mots-clés, " +
-          "ni une association vaguement possible au thème. Si la scène mentionne une action ou un objet absent de l'image, " +
-          "donne un score bas. Une image isolée ne prouve aucun mouvement. " +
+          "La pertinence mesure la fonction éditoriale de l'image par rapport à la citation ET à l'intention. " +
+          "Une image peut illustrer exactement une personne, un produit, un lieu ou un objet explicitement nommé dans la citation sans prouver toutes les affirmations abstraites. " +
+          "Exemple : une véritable interface Gemini illustre Gemini, même si elle ne prouve pas son adoption. Une représentation identifiable et non trompeuse de cette entité peut recevoir 0.9 si l'intention est remplie. " +
+          "Pour une action concrète essentielle, ne donne pas de score élevé si l'action n'est pas visible; une image isolée ne prouve aucun mouvement. " +
+          "Une association vague, une personne générique, une autre marque ou une reconstitution présentée comme archive sont insuffisantes. " +
           "Retourne UNIQUEMENT JSON : " +
           '{"description":"description concrète des éléments visibles","relevance":0.0,"visualQuality":0.0,"hasContradiction":false}. ' +
           "relevance et visualQuality doivent être des nombres entre 0 et 1. " +

@@ -6,7 +6,7 @@ from PIL import Image, ImageOps
 from app.media.resolver import download_public_media
 from app.media.ffmpeg import probe_media, run_ffmpeg
 
-SOURCES = {"artic": ("artic.edu",), "archive": ("archive.org",), "smithsonian": ("ids.si.edu","3d-api.si.edu")}
+SOURCES = {"artic": ("artic.edu",), "archive": ("archive.org",), "smithsonian": ("ids.si.edu","3d-api.si.edu"), "polyhaven_preview": ("cdn.polyhaven.com",), "web": ()}
 LICENSES = {"CC0 1.0", "CC BY 4.0", "CC BY 3.0", "CC BY 2.5", "CC BY 2.0", "CC BY 1.0", "Public Domain Mark 1.0"}
 
 def is_extended(row: dict) -> bool:
@@ -42,7 +42,7 @@ def clean_image(source: Path, output: Path, size: int = 1920) -> None:
             image.save(output, "JPEG", quality=86, optimize=True)
 
 async def download_extended(row: dict, target: Path) -> tuple[int,str]:
-    if os.getenv("SECURE_WEB_MEDIA_ENABLED") != "true":
+    if os.getenv("SECURE_WEB_MEDIA_ENABLED") == "false":
         raise ValueError("Import Web en quarantaine.")
     p = row.get("provenance") or {}
     kind = row.get("kind")
@@ -50,7 +50,16 @@ async def download_extended(row: dict, target: Path) -> tuple[int,str]:
         raise ValueError("Provenance ou droits Web incomplets.")
     limit = 45*1024*1024 if kind == "video" else 12*1024*1024
     try:
-        count,mime = await download_public_media(p["download_url"],target,limit,allowed_hosts=SOURCES[p["source"]])
+        hosts=SOURCES[p["source"]]
+        if p["source"]=="web":
+            # Reconfirm the exact asset-specific license on its public source page.
+            from app.media.licensed_web import licensed_page_candidates, public_https
+            from urllib.parse import urlsplit
+            candidates=await licensed_page_candidates(p["url"],kind)
+            if not any(c["download_url"]==p.get("download_url") and c["license"]==p.get("license") and c["author"]==p.get("author") for c in candidates):
+                raise ValueError("Licence du média Web non reconfirmée.")
+            hosts=(urlsplit(public_https(p["download_url"])).hostname,)
+        count,mime = await download_public_media(p["download_url"],target,limit,allowed_hosts=hosts)
         identify(target,kind,mime)
         if kind == "video":
             data=await probe_media(str(target),input_format="mov")

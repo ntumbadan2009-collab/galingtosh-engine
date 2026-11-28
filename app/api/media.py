@@ -251,3 +251,22 @@ async def secure_image_evidence(request:Request,payload:ProbeRequest)->dict[str,
             return {"sha256":await asyncio.to_thread(digest,source),"jpegBase64":base64.b64encode(thumb.read_bytes()).decode("ascii")}
         except (OSError,ValueError,FFmpegError,Image.DecompressionBombError,Image.DecompressionBombWarning):
             raise HTTPException(status_code=422,detail="Image inaccessible ou format non autorisé.") from None
+
+class LicensedWebRequest(BaseModel):
+    user_id: str = Field(min_length=1,max_length=80)
+    urls: list[str] = Field(min_length=1,max_length=3)
+    kind: str
+
+@user_router.post("/licensed-web-candidates")
+async def licensed_web_candidates(request:Request,payload:LicensedWebRequest):
+    from app.media.licensed_web import licensed_page_candidates
+    db=getattr(request.app.state,"supabase",None)
+    if not isinstance(db,SupabaseREST):raise HTTPException(status_code=503,detail="Stockage indisponible.")
+    token=request.headers.get("Authorization","").removeprefix("Bearer ").strip()
+    mission=request.headers.get("X-Production-Mission","")
+    if not mission:raise HTTPException(status_code=401,detail="Mission requise.")
+    uid=await db.production_user_id(token,mission)
+    if not uid or uid!=payload.user_id:raise HTTPException(status_code=401,detail="Mission invalide.")
+    if payload.kind not in {"image","video"}:raise HTTPException(status_code=422,detail="Type non pris en charge.")
+    rows=await asyncio.gather(*(licensed_page_candidates(url,payload.kind) for url in payload.urls),return_exceptions=True)
+    return {"results":[x for row in rows if isinstance(row,list) for x in row][:6]}

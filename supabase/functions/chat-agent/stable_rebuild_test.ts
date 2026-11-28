@@ -51,3 +51,14 @@ Deno.test("mission-wide definitive rejections are excluded; quotas are not",()=>
  const used=rejectedMediaIds(rows);assert(used.has("bad")&&!used.has("quota"));
  assert(mediaAttemptLimit(true)===1&&mediaAttemptLimit(false)===2);
 });
+
+import {auditFoundations,proceduralFallbackReady} from "./foundations.ts";
+Deno.test("bounded procedural fallback preserves strict scene checks and rejects stale receipts",()=>{
+ let f=applyOperation(defaultFilm("Test"),"add_scene",{title:"Scene",narrativeGoal:"Test",durationSec:4}).film;
+ const id=f.scenes[0].id;f=applyOperation(f,"set_scene_narration",{scene_id:id,text:"Une idée précise est expliquée.",targetDurationSec:4}).film;
+ f=applyOperation(f,"add_code_shot",{scene_id:id,inSec:0,outSec:4,visualText:"Une idée précise est expliquée."}).film;
+ assert(!auditFoundations(f).passed);
+ f.info.mediaFallback={version:1,reason:"licensed_media_exhausted",shotIds:[f.scenes[0].shots[0].id]};
+ assert(proceduralFallbackReady(f));assert(auditFoundations(f).passed);
+ f.info.mediaFallback.shotIds=["stale"];assert(!proceduralFallbackReady(f));assert(!auditFoundations(f).passed);
+});

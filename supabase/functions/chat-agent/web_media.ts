@@ -1,4 +1,4 @@
-// Web references are discovery only: search results never establish reuse rights.
+// Web references are discovery only; an authenticated resolver must establish media-specific reuse rights.
 export type WebReference={title:string;url:string;published?:string;kind:string;source?:string;license?:string;importable:false};
 const adult=/\b(?:porn(?:ography|hub|ographique)?|xxx|nsfw|hentai|gore|snuff|nude|nudity|pornographie|nudité|décapitation|torture|sexually explicit)\b/iu;
 const badHost=/(?:^|[.-])(?:pornhub|xvideos|xnxx|xhamster|redtube|onlyfans|youporn|rule34)(?:[.-]|$)/i;
@@ -36,7 +36,16 @@ export async function discoverWeb(query:string,kind:string,key:string,limit:numb
  u.searchParams.set("q",kind==="model3d"?query+" CC0 3D model":query);
  u.searchParams.set("safesearch","strict");u.searchParams.set("count",String(Math.min(20,limit)));
  if(kind==="news")u.searchParams.set("freshness","pm");
- const raw=await json(u,{"X-Subscription-Token":key});return webReferences(route==="web/search"?raw.web:raw,kind);
+ const primary=json(u,{"X-Subscription-Token":key}).then(raw=>webReferences(route==="web/search"?raw.web:raw,kind));
+ // Ordinary web search complements image/video search, especially for
+ // official pages and explicitly licensed resources. Never treat a hit as permission.
+ if(kind!=="image"&&kind!=="video")return primary;
+ const page=new URL("https://api.search.brave.com/res/v1/web/search");
+ page.searchParams.set("q",query+" Creative Commons");
+ page.searchParams.set("safesearch","strict");page.searchParams.set("count",String(Math.min(10,limit)));
+ const results=await Promise.allSettled([primary,json(page,{"X-Subscription-Token":key}).then(raw=>webReferences(raw.web,kind))]);
+ const merged=results.flatMap(r=>r.status==="fulfilled"?r.value:[]);
+ return [...new Map(merged.map(r=>[r.url,r])).values()].slice(0,limit*2);
 }
 // Official museum API: only asset records explicitly marked public domain.
 export async function artInstitute(query:string,limit:number){
@@ -93,8 +102,8 @@ export async function smithsonianSearch(query:string,key:string,limit:number){
  if(raw?.status!==undefined && raw.status!==200 && raw.status!=="200" && raw.status!=="success")throw Error("Smithsonian response status");
  return smithsonianCandidates(raw,limit);
 }
-export const extendedSource=(source:unknown)=>source==="artic"||source==="archive"||source==="smithsonian";
-export const extendedEnabled=()=>Deno.env.get("SECURE_WEB_MEDIA_ENABLED")==="true";
+export const extendedSource=(source:unknown)=>source==="artic"||source==="archive"||source==="smithsonian"||source==="web"||source==="polyhaven_preview";
+export const extendedEnabled=()=>Deno.env.get("SECURE_WEB_MEDIA_ENABLED")!=="false";
 
 // Metadata-only candidates remain useful while import is quarantined. Never expose a raw file URL or an attachable result ID.
 export function institutionalReference(x:any):WebReference|null {
