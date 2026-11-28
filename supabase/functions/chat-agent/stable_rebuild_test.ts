@@ -38,3 +38,16 @@ Deno.test("unreachable media is not a quota outage even in historical mixed erro
  assert(!mediaInputFailure(429,"Cannot fetch content from the provided URL."));
  assert(definitiveMediaChecks([{result:{error,transientProvider:true}}]).length===1);
 });
+
+import {candidateScore,rejectedMediaIds,mediaAttemptLimit} from "./structured.ts";
+Deno.test("named-entity candidate is prioritized over generic historic archive",()=>{
+ const old={result_id:"old",title:"Breeder and sportsman (1891)",author:"A",license:"CC BY",url:"https://example.org/old"};
+ const exact={...old,result_id:"exact",title:"OpenAI ChatGPT interface"};
+ assert(chooseCandidate([old,exact],new Set(),"image",4,"OpenAI ChatGPT")?.result_id==="exact");
+ assert(candidateScore(exact,"OpenAI ChatGPT")>candidateScore(old,"OpenAI ChatGPT"));
+});
+Deno.test("mission-wide definitive rejections are excluded; quotas are not",()=>{
+ const rows=[{kind:"structured_media_verify",status:"failed",result:{candidateId:"bad",reason:"not relevant"}},{kind:"structured_media_verify",status:"failed",result:{candidateId:"quota",transientProvider:true,error:"HTTP 429"}}];
+ const used=rejectedMediaIds(rows);assert(used.has("bad")&&!used.has("quota"));
+ assert(mediaAttemptLimit(true)===1&&mediaAttemptLimit(false)===2);
+});

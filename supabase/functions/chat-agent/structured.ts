@@ -13,7 +13,7 @@ const arr=(x:any):any[]=>Array.isArray(x)?x:[];
 const near=(a:number,b:number,t=.015)=>Math.abs(a-b)<=t;
 const ordered=(v:any)=>[...arr(v)].sort((a,b)=>Number(a.order)-Number(b.order));
 const S={type:"string"}, N={type:"number"};
-const kinds=["structured_script","structured_research_query","structured_research","structured_voice_measure","structured_voice_rate","structured_voice_align","structured_visual_layout","structured_visual_plan","structured_media_search","structured_media_attach","structured_media_verify","structured_media_fallback","structured_subtitles","structured_project_type","structured_director_revision"];
+const kinds=["structured_script","structured_research_query","structured_research","structured_voice_measure","structured_voice_rate","structured_voice_align","structured_visual_layout","structured_visual_plan","structured_media_search","structured_media_attach","structured_media_verify","structured_media_fallback","structured_subtitles","structured_project_type","structured_director_revision","structured_media_batch_search","structured_media_recovery_plan"];
 type Ledger={kind:string;status:string;result:any;step_no:number};
 export function exactQuote(scene:any,start:number,end:number){
  const text=String(scene.narration?.text??"").trim(), duration=Number(scene.durationSec);
@@ -91,9 +91,26 @@ export function transientFailure(row:{kind?:string;result?:any}):boolean{
  return !!row.result?.transientProvider&&!(row.kind==="structured_media_verify"&&isMediaInputFailure(row.result?.error));
 }
 export function definitiveMediaChecks<T extends {kind?:string;result?:any}>(rows:T[]):T[]{return rows.filter(x=>!x.result?.transientProvider||isMediaInputFailure(x.result?.error));}
-export function chooseCandidate(results:any[],used:Set<string>,kind:string,seconds:number){
- return arr(results).find(x=>typeof x.result_id==="string"&&!used.has(x.result_id)&&x.license&&x.author&&x.url&&!/unknown|inconnue|non renseignée/i.test(String(x.license))&&(kind!=="video"||x.duration==null||Number(x.duration)>=seconds));
+const stop=new Set("a an and as at by for from in into is of on or the to with de des du en et la le les par pour sur un une dans image photo video screen interface visual illustration footage stock".split(" "));
+const tokens=(v:unknown)=>String(v??"").normalize("NFKD").replace(/\p{M}/gu,"").toLowerCase().match(/[\p{L}\p{N}]{2,}/gu)?.filter(t=>!stop.has(t))??[];
+export function candidateScore(x:any,query:string,intent:string=""){
+ const q=[...new Set(tokens(query))],i=[...new Set(tokens(intent))],t=new Set(tokens(x.title));
+ const hits=q.filter(w=>t.has(w)).length;
+ const coverage=q.length?hits/q.length:0;
+ const meaningful=i.filter(w=>t.has(w)).length;
+ const exact=q.length>1&&q.every(w=>t.has(w))?3:0;
+ const old=/\b(?:18\d\d|19[0-4]\d)\b/.test(String(x.title))&&!q.some(w=>/^\d{4}$/.test(w))?2:0;
+ return 8*coverage+exact+Math.min(3,meaningful)*.35-old;
 }
+export function chooseCandidate(results:any[],used:Set<string>,kind:string,seconds:number,query="",intent=""){
+ const eligible=arr(results).filter(x=>typeof x.result_id==="string"&&!used.has(x.result_id)&&x.license&&x.author&&x.url&&!/unknown|inconnue|non renseignée|non précisée/i.test(String(x.license)+" "+String(x.author))&&(kind!=="video"||x.duration==null||Number(x.duration)>=seconds));
+ return eligible.sort((a,b)=>candidateScore(b,query,intent)-candidateScore(a,query,intent))[0];
+}
+export function rejectedMediaIds(rows:{kind?:string;status?:string;result?:any}[]):Set<string>{
+ return new Set(rows.filter(x=>x.kind==="structured_media_verify"&&x.status==="failed"&&!transientFailure(x)&&typeof x.result?.candidateId==="string").map(x=>x.result.candidateId));
+}
+export function mediaAttemptLimit(hasReal:boolean){return hasReal?1:2;}
+
 const durationOk=(n:number,target:number)=>Number.isFinite(n)&&n>0&&Math.abs(n-target)<=Math.max(2,target*.05);
 const keyOf=(x:any)=>directorKey(x,0,0);
 export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:Ctx,brief:unknown,release:(status:string,error?:string|null,delay?:number)=>Promise<any>){
@@ -229,6 +246,48 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
  // 5. Fixed visual timeline, then creative decisions on each scene's exact
  // slots. Media attempts are bounded per shot; code fallback is literal.
  const assets=assetMap(film);
+ const hasReal=auditFoundations(film).verifiedRealShots>0;
+ const rejected=rejectedMediaIds(history);
+ // A rejected candidate is not retried on later shots of this mission.
+ const usedAcrossFilm=new Set([...rejected,...history.filter(h=>h.kind==="structured_media_attach"&&h.status==="done").map(h=>String(h.result?.candidateId??""))]);
+ const processTarget=async(scene:any,target:any,slotKey:string,limit:number)=>{
+   const sh=arr(scene.shots).find(s=>s.id===target.shotId);
+   if(!sh)return block("visual_target_missing");
+   if(verifiedVisualEvidence(scene,sh,assets.get(sh.mediaRef))||done("structured_media_fallback",slotKey))return null;
+   const attempts=entries("structured_media_attach",slotKey);
+   const verified=definitiveMediaChecks(entries("structured_media_verify",slotKey)).filter(x=>!x.result?.transientProvider);
+   const last=attempts.at(-1);
+   if(last?.status==="done"&&sh.mediaRef===last.result.media_asset_id&&!verified.some(x=>x.result.candidateId===last.result.candidateId)){
+    return step("structured_media_verify",slotKey,()=>runTool("verify_shot_media",{shot_id:sh.id,narrationQuote:target.quote,visualIntent:target.intent}),{candidateId:last.result.candidateId});
+   }
+   if(attempts.length<limit){
+    const batch=done("structured_media_batch_search",slotKey);
+    const old=[0,1].flatMap(n=>{const x=done("structured_media_search",slotKey+":"+n);return x?[{kind:n===0?target.kind:(target.kind==="video"?"image":"video"),query:n===0?target.query:target.alternateQuery,results:x.result.results}]:[];});
+    const pools=batch?.result?.pools??old;
+    if(!batch&&old.length<2&&count("structured_media_batch_search",slotKey)<1){
+     return step("structured_media_batch_search",slotKey,async()=>{
+      const pairs=[{kind:target.kind,query:target.query},{kind:target.kind==="video"?"image":"video",query:target.alternateQuery||target.query}];
+      // One durable operation, two independent read-only searches in parallel.
+      const results=await Promise.all(pairs.map(async p=>({...p,...await runTool("search_media",{...p,limit:12})})));
+      return {pools:results.map(p=>({kind:p.kind,query:p.query,results:p.results??[],errors:p.errors??{}}))};
+     },{shotId:sh.id});
+    }
+    const used=new Set([...usedAcrossFilm,...attempts.map(x=>String(x.result.candidateId))]);
+    const candidates=arr(pools).flatMap(p=>arr(p.results).map(x=>({...x,searchKind:p.kind,searchQuery:p.query})));
+    // Metadata is only a shortlist, never proof of visual relevance.
+    const eligible=candidates.filter(x=>chooseCandidate([x],used,x.searchKind,Number(sh.outSec)-Number(sh.inSec)));
+    eligible.sort((a,b)=>candidateScore(b,b.searchQuery,target.intent)-candidateScore(a,a.searchQuery,target.intent));
+    const candidate=eligible[0];
+    if(candidate)return step("structured_media_attach",slotKey,()=>runTool("add_found_media",{shot_id:sh.id,result_id:candidate.result_id}),{candidateId:candidate.result_id});
+   }
+   if(count("structured_media_fallback",slotKey)>=2)return block("visual_fallback_failed");
+   return step("structured_media_fallback",slotKey,async()=>{
+    const args:any={shot_id:sh.id,visualText:target.quote,cardStyle:target.originalStyle??"focus"};
+    if(target.originalSpec){args.visualType=target.originalSpec.type;args.visualItems=arr(target.originalSpec.items).map(x=>x.text);}
+    const result=await runTool("turn_shot_into_code",args);
+    return {...result,reason:"bounded_media_candidates_exhausted"};
+   });
+ };
  for(const scene of scenes){
   const layoutKey=await keyOf({sceneId:scene.id,text:scene.narration.text,duration:scene.durationSec,slots:ordered(scene.shots).map(sh=>[sh.id,sh.inSec,sh.outSec])});
   const plan=done("structured_visual_plan",layoutKey);
@@ -245,7 +304,7 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
    return step("structured_visual_plan",layoutKey,async()=>{
     const codeShots=ordered(scene.shots).filter(sh=>sh.visualMode==="programmatic");
     if(!codeShots.length)return {sceneId:scene.id,targets:[]};
-    const raw=await call("submit_visual_plan",{targets:{type:"array",items:{type:"object",properties:{shotId:S,mode:{type:"string",enum:["media","code"]},query:S,alternateQuery:S,kind:{type:"string",enum:["image","video"]},intent:S,visualType:S,visualItems:{type:"array",items:S}},required:["shotId","mode","query","alternateQuery","kind","intent","visualType","visualItems"]}}},"Pour CHAQUE plan proposé, choisis un vrai média quand le contenu est observable directement et un schéma quand il est abstrait. Pour un média, indique deux requêtes visuelles différentes et concrètes, de préférence en anglais, et l'intention visible exacte. Un plan de guépard marchant ne démontre pas une course. Pour code, choisis focus, steps, timeline, comparison ou cause_effect uniquement si la citation le justifie; visualItems sont des extraits exacts et ordonnés de la citation. Ne change ni récit, ni durée, ni identifiant. Aucune source inventée. Aucun quota artificiel par scène. Un film complet doit contenir des médias réels pertinents vérifiés.",{goal:m.goal,brief,scene:scene.title,narration:scene.narration.text,shots:codeShots.map(sh=>({shotId:sh.id,quote:sh.visualText,seconds:sh.outSec-sh.inSec}))});
+    const raw=await call("submit_visual_plan",{targets:{type:"array",items:{type:"object",properties:{shotId:S,mode:{type:"string",enum:["media","code"]},query:S,alternateQuery:S,kind:{type:"string",enum:["image","video"]},intent:S,visualType:S,visualItems:{type:"array",items:S}},required:["shotId","mode","query","alternateQuery","kind","intent","visualType","visualItems"]}}},"Pour CHAQUE plan proposé, choisis un vrai média quand le contenu est observable directement et un schéma quand il est abstrait. Pour un média, indique deux requêtes visuelles différentes et concrètes, de préférence 2 à 5 mots en anglais. Utilise en priorité les entités nommées et objets précis du passage. Évite les bureaux, ordinateurs et personnes génériques pour représenter une marque ou un produit spécifique. L’intention décrit uniquement ce qui est directement observable. Un plan de guépard marchant ne démontre pas une course. Pour code, choisis focus, steps, timeline, comparison ou cause_effect uniquement si la citation le justifie; visualItems sont des extraits exacts et ordonnés de la citation. Ne change ni récit, ni durée, ni identifiant. Aucune source inventée. Aucun quota artificiel par scène. Un film complet doit contenir des médias réels pertinents vérifiés.",{goal:m.goal,brief,scene:scene.title,narration:scene.narration.text,shots:codeShots.map(sh=>({shotId:sh.id,quote:sh.visualText,seconds:sh.outSec-sh.inSec}))});
     const targets=arr(raw.targets);
     if(targets.length!==codeShots.length||new Set(targets.map(x=>x.shotId)).size!==codeShots.length||targets.some(x=>!codeShots.some(sh=>sh.id===x.shotId)||!["media","code"].includes(x.mode)||x.mode==="media"&&(!["image","video"].includes(x.kind)||typeof x.query!=="string"||!x.query.trim()||x.query.length>200||typeof x.alternateQuery!=="string"||x.alternateQuery.length>200||typeof x.intent!=="string"||x.intent.trim().length<10)))throw Error("visual_plan_contract_invalid");
     let next=film;const final:any[]=[];
@@ -263,48 +322,33 @@ export async function structuredTick(admin:any,m:Mission,lease:any,row:Row,ctx:C
    });
   }
   for(const target of arr(plan.result.targets)){
-   const sh=arr(scene.shots).find(s=>s.id===target.shotId);
-   if(!sh)return block("visual_target_missing");
-   if(verifiedVisualEvidence(scene,sh,assets.get(sh.mediaRef)))continue;
-   const slotKey=layoutKey+":"+sh.id;
-   if(done("structured_media_fallback",slotKey))continue;
-   const attempts=entries("structured_media_attach",slotKey);
-   const verified=definitiveMediaChecks(entries("structured_media_verify",slotKey)).filter(x=>!x.result?.transientProvider);
-// A legacy URL failure may be retried once through the new inline-byte path.
-// A fresh definitive failure must immediately select a different asset.
-   const last=attempts.at(-1);
-   if(last?.status==="done"&&sh.mediaRef===last.result.media_asset_id&&!verified.some(x=>x.result.candidateId===last.result.candidateId)){
-    return step("structured_media_verify",slotKey,()=>runTool("verify_shot_media",{shot_id:sh.id,narrationQuote:target.quote,visualIntent:target.intent}),{candidateId:last.result.candidateId});
-   }
-   const used=new Set<string>(attempts.map(x=>String(x.result.candidateId)));
-   // Try distinct assets in two independent searches; never retry the same rejected asset.
-   if(attempts.length<3){
-    for(let n=0;n<2;n++){
-     const searchKey=slotKey+":"+n;
-     const search=done("structured_media_search",searchKey);
-     const kind=n===0?target.kind:(target.kind==="video"?"image":"video");
-     if(!search){
-      if(count("structured_media_search",searchKey)>=2)continue;
-      const query=n===0?target.query:(target.alternateQuery||target.query);
-      return step("structured_media_search",searchKey,()=>runTool("search_media",{query,kind,limit:8}),{shotId:sh.id,kind,query});
-     }
-     const candidate=chooseCandidate(search.result.results,used,kind,Number(sh.outSec)-Number(sh.inSec));
-     if(candidate){
-      return step("structured_media_attach",slotKey,()=>runTool("add_found_media",{shot_id:sh.id,result_id:candidate.result_id}),{candidateId:candidate.result_id});
-     }
-    }
-   }
-   if(count("structured_media_fallback",slotKey)>=2)return block("visual_fallback_failed");
-   return step("structured_media_fallback",slotKey,async()=>{
-    const args:any={shot_id:sh.id,visualText:target.quote,cardStyle:target.originalStyle??"focus"};
-    if(target.originalSpec){args.visualType=target.originalSpec.type;args.visualItems=arr(target.originalSpec.items).map(x=>x.text);}
-    const result=await runTool("turn_shot_into_code",args);
-    return {...result,reason:"distinct_media_candidates_exhausted"};
-   });
+   const result=await processTarget(scene,target,layoutKey+":"+target.shotId,mediaAttemptLimit(hasReal));
+   if(result)return result;
   }
  }
- // 6. Do not dispatch a code-only movie or one with failed semantic gates.
- if(!auditFoundations(film).verifiedRealShots)return block("no_relevant_real_media_verified");
+ // One bounded recovery pass: replan ONLY a few literal, observable
+ // anchors if the normal pass found zero verified media. Never weaken the gate.
+ if(!hasReal){
+  const recoveryKey="real-media-recovery-v3:"+await keyOf(scenes.map(s=>[s.id,s.narration.text,arr(s.shots).map(sh=>sh.id)]));
+  const recovery=done("structured_media_recovery_plan",recoveryKey);
+  if(!recovery){
+   if(count("structured_media_recovery_plan",recoveryKey)>=2)return block("no_relevant_real_media_verified");
+   return step("structured_media_recovery_plan",recoveryKey,async()=>{
+    const available=scenes.flatMap(s=>arr(s.shots).filter(sh=>sh.visualMode==="programmatic").map(sh=>({sceneId:s.id,shotId:sh.id,quote:sh.visualText,seconds:sh.outSec-sh.inSec})));
+    const raw=await call("submit_recovery_anchors",{targets:{type:"array",items:{type:"object",properties:{shotId:S,query:S,alternateQuery:S,intent:S},required:["shotId","query","alternateQuery","intent"]}}},"Aucun média réel n'a encore été validé. Choisis au maximum trois plans parmi les citations proposées dont un élément concret ou une entité nommée est explicitement cité. Cherche une représentation directe et vérifiable de cet élément: portrait de la personne nommée, photo de lieu ou objet nommé, capture de produit ou photo documentaire authentique. N'utilise pas de symboles génériques, de décor stock, d'images d'archive sans lien, ni de fait que l'image ne peut pas montrer. Deux requêtes très courtes et différentes en anglais, chacune de 2 à 5 mots, contenant le nom propre exact quand il existe. L'intention doit préciser l'élément observable exact, pas prétendre démontrer une conséquence abstraite. Ne sélectionne aucun plan si aucune ancre honnête n'existe.",{goal:m.goal,available,previousQueries:history.filter(h=>h.kind==="structured_media_search"||h.kind==="structured_media_batch_search").map(h=>h.result?.query??h.result?.pools?.map((p:any)=>p.query)).slice(-20)});
+    const targets=arr(raw.targets);
+    if(targets.length>3||new Set(targets.map(x=>x.shotId)).size!==targets.length||targets.some(x=>!available.some(a=>a.shotId===x.shotId)||!["query","alternateQuery","intent"].every(k=>typeof x[k]==="string"&&x[k].trim().length>3&&x[k].length<=200)))throw Error("media_recovery_contract_invalid");
+    return {targets:targets.map(x=>{const a=available.find(a=>a.shotId===x.shotId)!;return {...x,...a,kind:"image",originalStyle:"focus"};})};
+   });
+  }
+  for(const target of arr(recovery.result.targets)){
+   const scene=scenes.find(s=>s.id===target.sceneId);
+   if(!scene)return block("visual_target_missing");
+   const result=await processTarget(scene,target,recoveryKey+":"+target.shotId,2);
+   if(result)return result;
+  }
+  return block("no_relevant_real_media_verified");
+ }
  if(scenes.some(s=>!sceneVisualReady(film,s)))return block("visual_timeline_invalid");
  // Subtitles requested explicitly: estimate cues from the measured scene
  // timings. The render engine can align more precisely when supported.

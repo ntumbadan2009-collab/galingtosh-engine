@@ -109,7 +109,7 @@ async function wikimedia({ query, kind, limit }: Q): Promise<Raw[]> {
   };
   for (const [k, v] of Object.entries(p)) u.searchParams.set(k, v);
   const j = await getJson(u.toString());
-  return (j.query?.pages ?? []).filter((pg: any) => pg.imageinfo?.[0]).map((pg: any) => {
+  return [...(j.query?.pages ?? [])].sort((a:any,b:any)=>(a.index??9999)-(b.index??9999)).filter((pg: any) => pg.imageinfo?.[0]).map((pg: any) => {
     const ii = pg.imageinfo[0];
     const md = ii.extmetadata ?? {};
     const author = strip(md.Artist?.value) || NO_AUTHOR;
